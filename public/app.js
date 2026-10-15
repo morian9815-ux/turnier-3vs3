@@ -855,7 +855,12 @@
             <input name="name" placeholder="Neuer Teamname, z. B. Team Alpha" maxlength="60" required autocomplete="off">
             <button class="btn btn-primary">+ Team erstellen</button>
           </form>
-          <div class="mini-stats"><span><b>${teams.length}</b> Teams</span><span><b>${players.length}</b> Spieler</span><span><b>${full}</b>/${teams.length} vollständig</span></div>
+          <div class="mini-stats">
+            <span><b>${teams.length}</b> Teams</span>
+            <span><b>${players.length}</b> Spieler</span>
+            <span><b>${full}</b>/${teams.length} vollständig</span>
+            <button class="btn btn-sm btn-ghost" id="seed-demo-btn" title="8 Teams, 24 Spieler & Woche 1 Paarungen laden">🎁 Demo-Daten ${teams.length ? 'neu generieren' : 'laden'}</button>
+          </div>
         </div>
         ${teams.length ? `<div class="team-grid">${teams.map((t) => `
           <article class="team-card metal ${t.players.length === 3 ? 'full' : ''}" data-team="${t.id}" data-name="${esc(t.name)}">
@@ -922,6 +927,18 @@
       } catch (err) { fail(err); }
       await refresh();
     });
+    root.querySelector('#seed-demo-btn')?.addEventListener('click', async () => {
+      const ok = await confirmModal('Demo-Daten laden?', 'Möchtest du 8 Demo-Teams à 3 Spieler, Paarungen für Woche 1 und Kalenderzeiten anlegen? Bereits existierende Teams bleiben unberührt.', 'Demo-Daten laden');
+      if (!ok) return;
+      try {
+        await api('/admin/seed-demo', { method: 'POST' });
+        toast('Demo-Daten erfolgreich generiert!');
+        await refresh();
+      } catch (err) {
+        fail(err);
+      }
+    });
+
     root.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]');
       if (!btn || btn.tagName === 'SELECT') return;

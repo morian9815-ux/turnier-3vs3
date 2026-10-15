@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { initDb } = require('./db');
 const { HOURS, STATUSES, getPhase, phaseDates } = require('./public/phases.js');
+const { seedDemoData } = require('./scripts/seed-demo.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin2026';
@@ -318,6 +319,11 @@ app.delete('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.post('/api/admin/seed-demo', requireAdmin, wrap(async (req, res) => {
+  const result = await seedDemoData(db);
+  res.json(result);
+}));
+
 // ---------- Fallbacks & Fehler ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpunkt nicht gefunden.' }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -331,8 +337,17 @@ app.use((err, req, res, next) => {
 });
 
 initDb()
-  .then((database) => {
+  .then(async (database) => {
     db = database;
+    try {
+      const existing = await db.all('SELECT id FROM teams LIMIT 1');
+      if (!existing.length && process.env.AUTO_SEED !== 'false') {
+        console.log('Datenbank ist leer – initialisiere Demo-Daten (8 Teams, 24 Spieler, Paarungen)...');
+        await seedDemoData(db);
+      }
+    } catch (err) {
+      console.error('Hinweis beim Demo-Seed:', err.message);
+    }
     app.listen(PORT, () => {
       console.log(`3vs3 Terminfinder läuft auf http://localhost:${PORT}  (Datenbank: ${db.kind}${db.file ? ' → ' + db.file : ''})`);
       if (!process.env.ADMIN_PASSWORD) console.log('Hinweis: Standard-Admin-Passwort "admin2026" aktiv (über ADMIN_PASSWORD änderbar).');
