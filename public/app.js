@@ -341,13 +341,73 @@
       const ps = PHASES.filter((p) => p.week === w);
       return `${formatDay(ps[0].start).short} – ${formatDay(ps[ps.length - 1].end).short}`;
     };
+
+    const heroMatchupsHTML = me.matchups.length ? `
+      <section class="player-matches-hero metal">
+        <div class="pmh-header">
+          <div class="pmh-title">
+            <span class="live-dot-green"></span>
+            <div>
+              <h2>⚔ Deine Spielpaarungen & 6-Spieler-Match-Abgleich</h2>
+              <p class="muted">Hier siehst du auf einen Klick, wann alle 6 Spieler (3 vs. 3) gleichzeitig Zeit haben:</p>
+            </div>
+          </div>
+          <span class="badge ok">${me.matchups.length} ${me.matchups.length === 1 ? 'Match angesetzt' : 'Matches angesetzt'}</span>
+        </div>
+        <div class="pmh-list">
+          ${me.matchups.map((m) => {
+            const ph = getPhase(m.phase_id);
+            const opponent = opponentOf(m, me.player.team_id);
+            const mySaved = saved.has(m.phase_id);
+            return `
+              <div class="pmh-card c-${ph ? ph.color : 'green'}">
+                <div class="pmh-meta">
+                  <span class="pmh-phase"><i class="dot"></i>${ph ? esc(ph.name) : ''}${ph && ph.subtitle ? ` (${esc(ph.subtitle)})` : ''} · Woche ${ph ? ph.week : ''}</span>
+                  <span class="pmh-dates">${ph ? formatRange(ph) : ''}</span>
+                </div>
+                <div class="pmh-teams">
+                  <div class="pmh-team my-team">
+                    <small>Dein Team</small>
+                    <b>${esc(me.player.team_name || 'Team A')}</b>
+                  </div>
+                  <div class="pmh-vs">VS</div>
+                  <div class="pmh-team opp-team">
+                    <small>Gegner</small>
+                    <b>${esc(opponent)}</b>
+                  </div>
+                </div>
+                <div class="pmh-actions">
+                  <a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-primary btn-lg pmh-btn-match">
+                    ⚔ Zum 6-Spieler-Match-Abgleich (Termine vergleichen) ›
+                  </a>
+                  <a href="#/player/phase/${m.phase_id}" class="btn btn-ghost pmh-btn-edit">
+                    🗓 ${mySaved ? '✓ Meine Zeiten bearbeiten' : '⚠️ Erst meine Zeiten eintragen'}
+                  </a>
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      </section>
+    ` : `
+      <section class="player-matches-hero metal no-match">
+        <div class="pmh-empty">
+          <span class="pmh-empty-icon">⚔</span>
+          <div>
+            <h3>Noch keine Spielpaarung für dein Team</h3>
+            <p class="muted">Sobald der Admin eine Paarung für <b>${esc(me.player.team_name || 'dein Team')}</b> festlegt, erscheint hier ganz oben der direkte 6-Spieler-Terminabgleich. Trage in der Zwischenzeit unten deine Zeiten in den Kalendern ein!</p>
+          </div>
+        </div>
+      </section>
+    `;
+
     $app.innerHTML = `
       ${playerTopbar(me)}
       <main class="container">
         ${kickoffBanner()}
+        ${heroMatchupsHTML}
         <div class="section-head">
-          <h2>Turnierphasen</h2>
-          <p class="muted">Wähle eine Phase, um deine Zeiten einzutragen oder den Match-Abgleich zu öffnen.</p>
+          <h2>🗓 Alle Turnierphasen & Kalender</h2>
+          <p class="muted">Trage deine persönlichen Verfügbarkeiten für jede Turnierwoche im Kalender ein:</p>
         </div>
         <div class="weeks">
           ${WEEKS.map((w) => `
@@ -361,14 +421,23 @@
                 ${PHASES.filter((p) => p.week === w.week).map((p) => {
                   const ms = me.matchups.filter((m) => m.phase_id === p.id);
                   return `
-                    <button class="phase-bar c-${p.color}" data-phase="${p.id}">
-                      <span class="pb-top"><span class="pb-name">${esc(p.name)}${p.subtitle ? ` <small>${esc(p.subtitle)}</small>` : ''}</span><span class="pb-arrow">›</span></span>
+                    <div class="phase-bar c-${p.color}" data-phase="${p.id}">
+                      <div class="pb-top">
+                        <span class="pb-name">${esc(p.name)}${p.subtitle ? ` <small>${esc(p.subtitle)}</small>` : ''}</span>
+                        <span class="pb-arrow">›</span>
+                      </div>
                       <span class="pb-dates">${formatRange(p)}</span>
-                      <span class="pb-meta">
+                      <div class="pb-meta">
                         ${saved.has(p.id) ? '<span class="badge ok">✓ Zeiten gespeichert</span>' : '<span class="badge open">Noch nicht eingetragen</span>'}
                         ${ms.map((m) => `<span class="badge vs">⚔ vs. ${esc(opponentOf(m, me.player.team_id))}</span>`).join('')}
-                      </span>
-                    </button>`;
+                      </div>
+                      ${ms.length ? `
+                        <div class="pb-quick-match">
+                          <a href="#/player/phase/${p.id}/match/${ms[0].id}" class="btn-match-direct" onclick="event.stopPropagation()">
+                            ⚔ Direkt zum Match-Abgleich vs. ${esc(opponentOf(ms[0], me.player.team_id))} ›
+                          </a>
+                        </div>` : ''}
+                    </div>`;
                 }).join('')}
               </div>
             </section>`).join('')}
@@ -390,7 +459,7 @@
     $app.innerHTML = `
       <div class="phase-view c-${phase.color}">
         <header class="pv-head metal">
-          <button class="btn btn-ghost btn-sm" id="back-btn">← Übersicht</button>
+          <button class="btn btn-ghost btn-sm" id="back-btn">← Zur Übersicht</button>
           <div class="pv-title">
             <span class="pv-dot"></span>
             <div>
@@ -402,13 +471,27 @@
         </header>
         <div class="pv-content">
           ${groupSiblings.length > 1 ? `<div class="week-switch">${groupSiblings.map((p) => `<a href="#/player/phase/${p.id}" class="${p.id === phase.id ? 'active' : ''}">Woche ${p.week} <small>${formatDay(p.start).short} – ${formatDay(p.end).short}</small></a>`).join('')}</div>` : ''}
-          <nav class="tabs">
-            <a class="tab ${mode === 'mine' ? 'active' : ''}" href="#/player/phase/${phase.id}">🗓 Meine Zeiten</a>
+          <nav class="tabs big match-nav-tabs">
+            <a class="tab ${mode === 'mine' ? 'active' : ''}" href="#/player/phase/${phase.id}">
+              🗓 1. Meine Zeiten eintragen
+            </a>
             ${myMatchups.length
-              ? `<a class="tab ${mode === 'match' ? 'active' : ''}" href="#/player/phase/${phase.id}/match/${myMatchups[0].id}">⚔ Match-Abgleich (Team vs. Team)</a>`
-              : `<span class="tab disabled" title="Für diese Phase wurde noch keine Paarung für dein Team festgelegt.">⚔ Match-Abgleich (Team vs. Team)</span>`}
+              ? `<a class="tab match-tab-highlight ${mode === 'match' ? 'active' : ''}" href="#/player/phase/${phase.id}/match/${myMatchups[0].id}">
+                  ⚔ 2. Match-Abgleich: 6 Spieler (${esc(me.player.team_name)} vs. ${esc(opponentOf(myMatchups[0], me.player.team_id))})
+                  <span class="pulse-pill">🔥 Wichtig</span>
+                </a>`
+              : `<span class="tab disabled" title="Für diese Phase wurde noch keine Paarung für dein Team festgelegt.">⚔ 2. Match-Abgleich (Noch kein Gegner eingeteilt)</span>`}
           </nav>
-          ${!myMatchups.length ? '<p class="hint small">Der Match-Abgleich wird freigeschaltet, sobald der Admin eine Paarung mit deinem Team für diese Phase festlegt.</p>' : ''}
+          ${mode === 'mine' && myMatchups.length ? `
+            <div class="match-callout metal">
+              <span class="mc-icon">⚔</span>
+              <div class="mc-content">
+                <b>Angesetztes Match: ${esc(me.player.team_name)} vs. ${esc(opponentOf(myMatchups[0], me.player.team_id))}</b>
+                <p>Trage unten deine Zeiten ein und speichere sie. Sobald du fertig bist, kannst du oben auf <b>„⚔ 2. Match-Abgleich“</b> klicken, um zu sehen, an welchen Stunden alle 6 Spieler gleichzeitig grün haben!</p>
+              </div>
+              <a href="#/player/phase/${phase.id}/match/${myMatchups[0].id}" class="btn btn-primary btn-sm mc-cta">Zum Match-Abgleich ›</a>
+            </div>` : ''}
+          ${!myMatchups.length ? '<p class="hint small">Der Match-Abgleich wird hier freigeschaltet, sobald der Admin eine Paarung mit deinem Team für diese Phase festlegt.</p>' : ''}
           <div id="pv-body"><div class="loading"><div class="spinner"></div></div></div>
         </div>
       </div>`;
