@@ -126,7 +126,25 @@
   }
 
   function brand(small = false) {
-    return `<div class="brand ${small ? 'small' : ''}"><span class="logo"><b>3<i>vs</i>3</b></span><span class="brand-text"><b>Turnier-Terminfinder</b><small>Winter 2026 · 09.11. – 06.12.</small></span></div>`;
+    if (small) {
+      return `
+        <div class="brand small">
+          <img src="/logo.png" alt="3vs3 Turnier Logo" class="brand-crest-sm">
+          <span class="logo"><b>3<i>vs</i>3</b></span>
+          <span class="brand-text"><b>Turnier-Terminfinder</b><small>Winter 2026 · 09.11. – 06.12.</small></span>
+        </div>`;
+    }
+    return `
+      <div class="brand hero-brand">
+        <div class="crest-showcase">
+          <div class="crest-glow"></div>
+          <img src="/logo.png" alt="3vs3 Turnier Wappen" class="crest-img">
+        </div>
+        <div class="brand-row">
+          <span class="logo"><b>3<i>vs</i>3</b></span>
+          <span class="brand-text"><b>Turnier-Terminfinder</b><small>Winter 2026 · 09.11. – 06.12.</small></span>
+        </div>
+      </div>`;
   }
 
   function legend(kind = 'edit') {
@@ -370,7 +388,7 @@
                     <small>Dein Team</small>
                     <b>${esc(me.player.team_name || 'Team A')}</b>
                   </div>
-                  <div class="pmh-vs">VS</div>
+                  <div class="pmh-vs"><img src="/logo.png" alt="" class="pmh-vs-crest"><span>VS</span></div>
                   <div class="pmh-team opp-team">
                     <small>Gegner</small>
                     <b>${esc(opponent)}</b>
@@ -392,7 +410,7 @@
     ` : `
       <section class="player-matches-hero metal no-match">
         <div class="pmh-empty">
-          <span class="pmh-empty-icon">⚔</span>
+          <img src="/logo.png" alt="" class="pmh-empty-crest">
           <div>
             <h3>Noch keine Spielpaarung für dein Team</h3>
             <p class="muted">Sobald der Admin eine Paarung für <b>${esc(me.player.team_name || 'dein Team')}</b> festlegt, erscheint hier ganz oben der direkte 6-Spieler-Terminabgleich. Trage in der Zwischenzeit unten deine Zeiten in den Kalendern ein!</p>
@@ -462,6 +480,7 @@
         <header class="pv-head metal">
           <button class="btn btn-ghost btn-sm" id="back-btn">← Zur Übersicht</button>
           <div class="pv-title">
+            <img src="/logo.png" alt="3vs3" class="pv-crest">
             <span class="pv-dot"></span>
             <div>
               <h1>${esc(phase.name)}${phase.subtitle ? ` <small>${esc(phase.subtitle)}</small>` : ''}</h1>
@@ -708,7 +727,7 @@
       body.innerHTML = `
         ${prefix}
         <div class="match-head">
-          <div class="vs-card metal">${teamBox(data.teamA, 'a')}<div class="vs-badge">VS</div>${teamBox(data.teamB, 'b')}</div>
+          <div class="vs-card metal">${teamBox(data.teamA, 'a')}<div class="vs-badge"><img src="/logo.png" alt="" class="vs-crest"><span>VS</span></div>${teamBox(data.teamB, 'b')}</div>
           <div class="match-stats">
             <div class="stat perfect"><b>${perfect.length}</b><span>Perfekte Termine<br><small>alle ${n} grün</small></span></div>
             <div class="stat maybe"><b>${maybe.length}</b><span>Mögliche Optionen<br><small>keiner rot</small></span></div>
