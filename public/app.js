@@ -378,10 +378,11 @@
                 </div>
                 <div class="pmh-actions">
                   <a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-primary btn-lg pmh-btn-match">
-                    ⚔ Zum 6-Spieler-Match-Abgleich (Termine vergleichen) ›
+                    <span class="btn-main-txt">⚔ 6-Spieler-Match-Abgleich ›</span>
+                    <span class="btn-sub-txt">Gemeinsame Termine ansehen</span>
                   </a>
                   <a href="#/player/phase/${m.phase_id}" class="btn btn-ghost pmh-btn-edit">
-                    🗓 ${mySaved ? '✓ Meine Zeiten bearbeiten' : '⚠️ Erst meine Zeiten eintragen'}
+                    🗓 ${mySaved ? '✓ Meine Zeiten bearbeiten' : '⚠️ Erst eigene Zeiten eintragen'}
                   </a>
                 </div>
               </div>`;

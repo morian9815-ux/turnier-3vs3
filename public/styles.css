@@ -636,26 +636,49 @@ input:disabled { opacity: 0.45; }
 
 .pmh-actions {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   flex-wrap: wrap;
 }
 .pmh-btn-match {
-  flex: 1 1 320px;
-  font-size: 1.1rem;
-  padding: 14px 20px;
-  font-weight: 800;
-  letter-spacing: 0.01em;
+  flex: 1 1 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px 18px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
   box-shadow: 0 4px 16px rgba(54, 217, 133, 0.4);
   animation: subtle-pulse 2.5s infinite;
+}
+.pmh-btn-match .btn-main-txt {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+.pmh-btn-match .btn-sub-txt {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.88;
+  letter-spacing: 0.01em;
 }
 @keyframes subtle-pulse {
   0%, 100% { transform: scale(1); box-shadow: 0 4px 16px rgba(54, 217, 133, 0.4); }
   50% { transform: scale(1.015); box-shadow: 0 6px 22px rgba(54, 217, 133, 0.65); }
 }
 .pmh-btn-edit {
-  font-size: 0.95rem;
-  padding: 13px 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.92rem;
+  padding: 12px 18px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.3;
 }
 
 .pmh-empty {
@@ -793,9 +816,13 @@ input:disabled { opacity: 0.45; }
   .tip-teams { grid-template-columns: 1fr; }
   .field.inline select { min-width: 0; width: 100%; }
   .kickoff { flex-wrap: wrap; }
-  .tabs.big .tab { padding: 10px 12px; font-size: 0.9rem; }
-  .pmh-teams { grid-template-columns: 1fr; text-align: center; }
+  .pmh-card { padding: 14px 12px; }
+  .pmh-teams { grid-template-columns: 1fr; text-align: center; padding: 12px 10px; gap: 10px; }
   .pmh-team.opp-team { text-align: center; }
   .pmh-vs { margin: 0 auto; }
-  .pmh-btn-match { width: 100%; }
+  .pmh-actions { flex-direction: column; gap: 10px; width: 100%; }
+  .pmh-btn-match { width: 100%; flex: 1 1 auto; padding: 12px 10px; }
+  .pmh-btn-match .btn-main-txt { font-size: 0.98rem; }
+  .pmh-btn-match .btn-sub-txt { font-size: 0.78rem; }
+  .pmh-btn-edit { width: 100%; font-size: 0.88rem; padding: 11px 12px; }
 }

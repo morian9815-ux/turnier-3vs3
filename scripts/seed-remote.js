@@ -4,16 +4,7 @@ const { HOURS, getPhase, phaseDates } = require('../public/phases.js');
 const TARGET_URL = process.env.TARGET_URL || 'https://turnier-3vs3turnier-3vs3.onrender.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin2026';
 
-const TEAMS = {
-  'Team Alpha': ['Max Mustermann', 'Lena Krüger', 'Jonas Weber'],
-  'Team Bravo': ['Sophie Becker', 'Paul Schulz', 'Mia Hoffmann'],
-  'Team Charlie': ['Leon Fischer', 'Emma Wagner', 'Finn Schäfer'],
-  'Team Delta': ['Hannah Koch', 'Noah Richter', 'Lea Klein'],
-  'Team Echo': ['Elias Wolf', 'Clara Neumann', 'Ben Schwarz'],
-  'Team Foxtrot': ['Marie Zimmermann', 'Luis Braun', 'Lina Hartmann'],
-  'Team Golf': ['Felix Lange', 'Ida Schmitt', 'Theo Krause'],
-  'Team Hotel': ['Nora Meier', 'Anton Lehmann', 'Ella König'],
-};
+const { TEAMS } = require('./seed-teams.js');
 
 async function api(path, { method = 'GET', body, token } = {}) {
   const headers = { Accept: 'application/json' };
