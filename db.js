@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS matchups (
   confirmed_by_player_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_matchups_phase ON matchups(phase_id);
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY,
+  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  phase_id TEXT,
+  matchup_id INTEGER REFERENCES matchups(id) ON DELETE CASCADE,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notif_player ON notifications(player_id, is_read, id);
 `;
 
 const SCHEMA_SQLITE = SCHEMA_PG.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT');

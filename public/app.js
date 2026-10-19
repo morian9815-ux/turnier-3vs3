@@ -153,7 +153,8 @@
         <span><i class="lg m-perfect"></i>Perfekt – alle grün</span>
         <span><i class="lg m-maybe"></i>Möglich – keiner rot, mind. 1 gelb</span>
         <span><i class="lg m-no"></i>Nicht möglich – mind. 1 rot / nicht eingetragen</span>
-        <span><i class="lg m-tv"></i>📺 Anderes Spiel (inkl. ~1,5h Spielzeit)</span>
+        <span><i class="lg m-own-busy"></i>🚫 Eigenes Spiel (gesperrt, inkl. ~1,5h)</span>
+        <span><i class="lg m-tv"></i>📺 Anderes Spiel (Stream-Hinweis)</span>
       </div>`;
     }
     return `<div class="legend">
@@ -326,6 +327,63 @@
     }
   }
 
+  function notifMeta(kind) {
+    switch (kind) {
+      case 'proposal_received':
+        return { icon: '📩', label: 'Terminvorschlag erhalten', cls: 'nc-incoming' };
+      case 'counter_proposal':
+        return { icon: '🔄', label: 'Gegenvorschlag erhalten', cls: 'nc-incoming' };
+      case 'match_confirmed':
+        return { icon: '🎉', label: 'Fester Termin bestätigt', cls: 'nc-confirmed' };
+      case 'all_6_ready':
+        return { icon: '🔓', label: 'Alle 6 Spieler bereit', cls: 'nc-ready' };
+      case 'teammate_proposed':
+        return { icon: '👥', label: 'Mitspieler-Vorschlag', cls: 'nc-team' };
+      case 'teammate_availability':
+        return { icon: '👥', label: 'Mitspieler-Zeiten', cls: 'nc-team' };
+      case 'match_reset':
+        return { icon: '⚠️', label: 'Termin zurückgesetzt', cls: 'nc-reset' };
+      default:
+        return { icon: '🔔', label: 'Turnier-Info', cls: 'nc-team' };
+    }
+  }
+
+  function notifTopbarBtn(me) {
+    const unread = Number(me.unreadCount || 0);
+    return `
+      <button type="button" class="notif-top-btn ${unread > 0 ? 'has-unread' : ''}" id="notif-center-btn" title="Nachrichtenzentrale öffnen">
+        <span class="notif-bell" aria-hidden="true">🔔</span>
+        <span class="notif-btn-text">Nachrichten</span>
+        ${unread > 0
+          ? `<span class="notif-red-badge" id="notif-top-badge" aria-label="${unread} ungelesene Nachrichten">${unread}</span>`
+          : `<span class="notif-zero-badge" id="notif-top-badge">0</span>`}
+      </button>`;
+  }
+
+  function notifStartBanner(me) {
+    const unread = Number(me.unreadCount || 0);
+    if (unread <= 0) return '<div id="notif-start-banner-wrap"></div>';
+    const unreadList = (me.notifications || []).filter((n) => !n.is_read);
+    const newest = unreadList[0];
+    const meta = newest ? notifMeta(newest.kind) : { icon: '🔔' };
+    return `
+      <div id="notif-start-banner-wrap">
+        <div class="notif-slim-banner metal" id="notif-slim-banner" role="region" aria-label="Ungelesene Nachrichten">
+          <div class="nsb-left">
+            <span class="notif-red-badge lg">${unread}</span>
+            <div class="nsb-text">
+              <b>Du hast ${unread === 1 ? '1 neue, ungelesene Nachricht' : `${unread} neue, ungelesene Nachrichten`}!</b>
+              ${newest ? `<span class="nsb-preview">${meta.icon} <em>${esc(newest.title)}</em>${unread > 1 ? ` · und ${unread - 1} weitere` : ''}</span>` : ''}
+            </div>
+          </div>
+          <div class="nsb-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="nsb-open-btn">📬 Nachrichtenzentrale öffnen</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="nsb-readall-btn" title="Alle als gelesen markieren">✓ Alle gelesen</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
   function playerTopbar(me) {
     const p = me.player;
     return `
@@ -337,15 +395,218 @@
           </div>
           ${me.teammates.length ? `<div class="mates"><span>Mitspieler:</span>${me.teammates.map((m) => `<span class="mate">${esc(m.name)}</span>`).join('')}</div>` : ''}
         </div>
-        <button class="btn btn-ghost btn-sm" id="logout-btn">Logout</button>
+        <div class="topbar-actions">
+          ${notifTopbarBtn(me)}
+          <button class="btn btn-ghost btn-sm" id="logout-btn">Logout</button>
+        </div>
       </header>`;
   }
 
-  function bindLogout() {
+  function updateNotifUI(me) {
+    const unread = Number(me.unreadCount || 0);
+    const topBtn = document.getElementById('notif-center-btn');
+    if (topBtn) {
+      topBtn.classList.toggle('has-unread', unread > 0);
+      const badge = document.getElementById('notif-top-badge');
+      if (badge) {
+        badge.className = unread > 0 ? 'notif-red-badge' : 'notif-zero-badge';
+        badge.textContent = String(unread);
+      }
+    }
+    const bannerWrap = document.getElementById('notif-start-banner-wrap');
+    if (bannerWrap) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = notifStartBanner(me);
+      bannerWrap.replaceWith(tmp.firstElementChild);
+      bindNotifBannerEvents(me);
+    }
+  }
+
+  function openNotificationCenter(me) {
+    const existing = document.getElementById('notif-modal-backdrop');
+    if (existing) existing.remove();
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop notif-backdrop';
+    backdrop.id = 'notif-modal-backdrop';
+
+    const renderModalContent = () => {
+      const list = me.notifications || [];
+      const unread = list.filter((n) => !n.is_read);
+      const read = list.filter((n) => n.is_read);
+
+      const renderItem = (n) => {
+        const meta = notifMeta(n.kind);
+        const ph = n.phase_id ? getPhase(n.phase_id) : null;
+        const canJump = Boolean(n.phase_id && n.matchup_id);
+        return `
+          <div class="nc-card ${meta.cls} ${n.is_read ? 'is-read' : 'is-unread'}" data-nid="${n.id}">
+            <div class="nc-card-top">
+              <span class="nc-type-badge">${meta.icon} ${esc(meta.label)}</span>
+              ${ph ? `<span class="nc-phase-tag">${esc(ph.name)} · Woche ${ph.week}</span>` : ''}
+              ${!n.is_read
+                ? '<span class="nc-unread-pill"><i class="nc-red-dot"></i>NEU</span>'
+                : '<span class="nc-read-pill">✓ Gelesen</span>'}
+            </div>
+            <h4 class="nc-card-title">${esc(n.title)}</h4>
+            <p class="nc-card-body">${esc(n.body)}</p>
+            <div class="nc-card-actions">
+              ${canJump
+                ? `<button type="button" class="btn btn-primary btn-sm nc-jump-btn" data-nid="${n.id}" data-phase="${esc(n.phase_id)}" data-match="${n.matchup_id}">
+                    ⚔ Direkt zum Match-Abgleich ›
+                  </button>`
+                : ph
+                ? `<button type="button" class="btn btn-primary btn-sm nc-jump-phase-btn" data-nid="${n.id}" data-phase="${esc(n.phase_id)}">
+                    🗓 Zur Turnierphase ›
+                  </button>`
+                : ''}
+              ${!n.is_read
+                ? `<button type="button" class="btn btn-ghost btn-sm nc-mark-btn" data-nid="${n.id}">✓ Als gelesen markieren</button>`
+                : ''}
+            </div>
+          </div>`;
+      };
+
+      backdrop.innerHTML = `
+        <div class="modal notif-modal metal" role="dialog" aria-modal="true" aria-labelledby="nc-modal-title">
+          <header class="nc-head">
+            <div class="nc-head-title">
+              <span class="nc-head-icon">📬</span>
+              <div>
+                <h3 id="nc-modal-title">Nachrichtenzentrale</h3>
+                <p class="muted">Alle wichtigen Updates zu Terminvorschlägen, Einigungen & deinem Team</p>
+              </div>
+              ${unread.length > 0 ? `<span class="notif-red-badge lg">${unread.length} neu</span>` : '<span class="badge ok">Alles gelesen</span>'}
+            </div>
+            <div class="nc-head-actions">
+              ${unread.length > 0 ? `<button type="button" class="btn btn-ghost btn-sm" id="nc-mark-all-btn">✓ Alle als gelesen markieren</button>` : ''}
+              <button type="button" class="btn btn-ghost btn-sm" id="nc-close-btn">✕ Schließen</button>
+            </div>
+          </header>
+          <div class="nc-body">
+            ${list.length === 0 ? `
+              <div class="nc-empty">
+                <p>Aktuell liegen noch keine Nachrichten für dich vor.</p>
+              </div>
+            ` : `
+              ${unread.length > 0 ? `
+                <div class="nc-section">
+                  <div class="nc-sec-title"><span class="notif-red-badge sm">${unread.length}</span> Ungelesene Nachrichten</div>
+                  <div class="nc-list">${unread.map(renderItem).join('')}</div>
+                </div>
+              ` : `
+                <div class="nc-all-clear">
+                  <span>🎉</span> Du bist auf dem neuesten Stand – keine ungelesenen Nachrichten!
+                </div>
+              `}
+              ${read.length > 0 ? `
+                <div class="nc-section nc-read-sec">
+                  <div class="nc-sec-title muted">Bereits gelesen (${read.length})</div>
+                  <div class="nc-list">${read.map(renderItem).join('')}</div>
+                </div>
+              ` : ''}
+            `}
+          </div>
+        </div>`;
+
+      const close = () => backdrop.remove();
+      backdrop.querySelector('#nc-close-btn')?.addEventListener('click', close);
+      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+
+      backdrop.querySelector('#nc-mark-all-btn')?.addEventListener('click', async () => {
+        try {
+          const res = await api(`/players/${me.player.id}/notifications/read-all`, { method: 'POST' });
+          me.notifications = res.notifications;
+          me.unreadCount = res.unreadCount;
+          updateNotifUI(me);
+          renderModalContent();
+          toast('Alle Nachrichten als gelesen markiert.', 'ok');
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+
+      backdrop.querySelectorAll('.nc-mark-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const nid = btn.dataset.nid;
+          try {
+            const res = await api(`/players/${me.player.id}/notifications/${nid}/read`, { method: 'POST' });
+            me.notifications = res.notifications;
+            me.unreadCount = res.unreadCount;
+            updateNotifUI(me);
+            renderModalContent();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        });
+      });
+
+      backdrop.querySelectorAll('.nc-jump-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const nid = btn.dataset.nid;
+          const phId = btn.dataset.phase;
+          const mId = btn.dataset.match;
+          try {
+            const res = await api(`/players/${me.player.id}/notifications/${nid}/read`, { method: 'POST' });
+            me.notifications = res.notifications;
+            me.unreadCount = res.unreadCount;
+            updateNotifUI(me);
+          } catch { /* ignore */ }
+          close();
+          go(`#/player/phase/${phId}/match/${mId}`);
+        });
+      });
+
+      backdrop.querySelectorAll('.nc-jump-phase-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const nid = btn.dataset.nid;
+          const phId = btn.dataset.phase;
+          try {
+            const res = await api(`/players/${me.player.id}/notifications/${nid}/read`, { method: 'POST' });
+            me.notifications = res.notifications;
+            me.unreadCount = res.unreadCount;
+            updateNotifUI(me);
+          } catch { /* ignore */ }
+          close();
+          go(`#/player/phase/${phId}`);
+        });
+      });
+    };
+
+    renderModalContent();
+    document.body.appendChild(backdrop);
+  }
+
+  function bindNotifBannerEvents(me) {
+    document.getElementById('nsb-open-btn')?.addEventListener('click', () => openNotificationCenter(me));
+    document.getElementById('notif-slim-banner')?.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      openNotificationCenter(me);
+    });
+    document.getElementById('nsb-readall-btn')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await api(`/players/${me.player.id}/notifications/read-all`, { method: 'POST' });
+        me.notifications = res.notifications;
+        me.unreadCount = res.unreadCount;
+        updateNotifUI(me);
+        toast('Alle Nachrichten als gelesen markiert.', 'ok');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+
+  function bindLogout(me) {
     document.getElementById('logout-btn')?.addEventListener('click', () => {
       localStorage.removeItem(LS_PLAYER);
       go('#/');
     });
+    if (me) {
+      document.getElementById('notif-center-btn')?.addEventListener('click', () => openNotificationCenter(me));
+      bindNotifBannerEvents(me);
+    }
   }
 
   function opponentOf(m, teamId) {
@@ -480,6 +741,7 @@
     $app.innerHTML = `
       ${playerTopbar(me)}
       <main class="container">
+        ${notifStartBanner(me)}
         ${kickoffBanner()}
         ${heroMatchupsHTML}
         <div class="section-head">
@@ -524,7 +786,7 @@
             </section>`).join('')}
         </div>
       </main>`;
-    bindLogout();
+    bindLogout(me);
     $app.querySelectorAll('.phase-bar').forEach((b) => b.addEventListener('click', () => go(`#/player/phase/${b.dataset.phase}`)));
   }
 
@@ -550,7 +812,10 @@
               <p>Woche ${phase.week} · ${formatRange(phase)}</p>
             </div>
           </div>
-          <div class="pv-user"><span class="avatar sm">${esc(me.player.name.slice(0, 1).toUpperCase())}</span><span>${esc(me.player.name)}<small>${esc(me.player.team_name || 'ohne Team')}</small></span></div>
+          <div class="pv-right-actions">
+            ${notifTopbarBtn(me)}
+            <div class="pv-user"><span class="avatar sm">${esc(me.player.name.slice(0, 1).toUpperCase())}</span><span>${esc(me.player.name)}<small>${esc(me.player.team_name || 'ohne Team')}</small></span></div>
+          </div>
         </header>
         <div class="pv-content">
           ${groupSiblings.length > 1 ? `<div class="week-switch">${groupSiblings.map((p) => `<a href="#/player/phase/${p.id}" class="${p.id === phase.id ? 'active' : ''}">Woche ${p.week} <small>${formatDay(p.start).short} – ${formatDay(p.end).short}</small></a>`).join('')}</div>` : ''}
@@ -581,6 +846,7 @@
         </div>
       </div>`;
     document.getElementById('back-btn').addEventListener('click', () => go('#/player'));
+    document.getElementById('notif-center-btn')?.addEventListener('click', () => openNotificationCenter(me));
     const body = document.getElementById('pv-body');
 
     if (mode === 'mine') {
@@ -799,8 +1065,11 @@
       const waitTeamName = m.proposed_by_team_id === data.teamA.id ? data.teamB.name : m.proposed_by_team_id === data.teamB.id ? data.teamA.name : '';
 
       // Parallelspiel- & Stream-Radar (Spieldauer bis ca. 1,5 Stunden -> ±1 Stunde am selben Tag)
+      // - is_own_team === true: Eines der beiden beteiligten Teams spielt selbst schon -> GESPERRT (🚫)
+      // - is_own_team === false: Fremdes Spiel -> Stream-/Zuschauer-Hinweis (📺⚠️)
       const pad2 = (x) => String(x).padStart(2, '0');
       const otherConfirmed = Array.isArray(data.otherConfirmed) ? data.otherConfirmed : [];
+      const busyTeamNameOf = (c) => (c.team_a_id === data.teamA.id || c.team_b_id === data.teamA.id ? data.teamA.name : data.teamB.name);
       const conflictsFor = (slotKey) => {
         if (!slotKey || !slotKey.includes('|')) return [];
         const [d, hStr] = slotKey.split('|');
@@ -823,8 +1092,16 @@
         }
         return list;
       };
+      const ownConflictsFor = (slotKey) => conflictsFor(slotKey).filter((c) => c.is_own_team);
+      const streamConflictsFor = (slotKey) => conflictsFor(slotKey).filter((c) => !c.is_own_team);
+
       const conflictChipBadge = (k) => {
-        const cs = conflictsFor(k);
+        const ownCs = ownConflictsFor(k);
+        if (ownCs.length) {
+          const c = ownCs[0];
+          return `<span class="sp-conflict own-busy">🚫 ${esc(busyTeamNameOf(c))} spielt bereits (${pad2(c.otherHour)}:00)</span>`;
+        }
+        const cs = streamConflictsFor(k);
         if (!cs.length) return '';
         const hasExact = cs.some((c) => c.exact);
         const label = hasExact
@@ -833,7 +1110,11 @@
         return `<span class="sp-conflict ${hasExact ? 'exact' : 'overlap'}">${label}</span>`;
       };
       const conflictTitle = (k) => {
-        const cs = conflictsFor(k);
+        const ownCs = ownConflictsFor(k);
+        if (ownCs.length) {
+          return 'Gesperrt (Eigenes Spiel ~1,5h): ' + ownCs.map((c) => `${busyTeamNameOf(c)} spielt bereits (${c.team_a_name} vs. ${c.team_b_name}, ${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join(', ');
+        }
+        const cs = streamConflictsFor(k);
         if (!cs.length) return '';
         return 'Achtung Stream/Zuschauer (~1,5h Spielzeit): ' + cs.map((c) => `${c.team_a_name} vs. ${c.team_b_name} (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join(', ');
       };
@@ -900,22 +1181,30 @@
               <div class="prop-choice-grid">
                 ${propSlots.map((k) => {
                   const i = info(k);
-                  const cs = conflictsFor(k);
+                  const ownCs = ownConflictsFor(k);
+                  const cs = streamConflictsFor(k);
                   const badge = i.cls === 'm-perfect'
                     ? `<span class="badge ok">🏆 Perfekt (${i.g}/${n} Grün)</span>`
                     : `<span class="badge warn">⚡ Möglich (${i.g} Grün · ${i.y} Gelb)</span>`;
-                  const tvInfo = cs.length
-                    ? `<div class="pcc-conflict-warn">📺⚠️ <b>Achtung (Stream/Zuschauer):</b><br>${cs.map((c) => `${c.exact ? 'Zeitgleich' : 'Überschneidung (~1,5h)'} mit <b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join('<br>')}</div>`
-                    : otherConfirmed.length ? `<span class="badge tv-free">📺 Frei (kein Parallelspiel)</span>` : '';
+                  let tvInfo = '';
+                  if (ownCs.length) {
+                    tvInfo = `<div class="pcc-own-busy-warn">🚫 <b>Gesperrt (Eigenes Spiel):</b><br>${ownCs.map((c) => `<b>${esc(busyTeamNameOf(c))}</b> spielt bereits (${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}, ${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join('<br>')}</div>`;
+                  } else if (cs.length) {
+                    tvInfo = `<div class="pcc-conflict-warn">📺⚠️ <b>Achtung (Stream/Zuschauer):</b><br>${cs.map((c) => `${c.exact ? 'Zeitgleich' : 'Überschneidung (~1,5h)'} mit <b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join('<br>')}</div>`;
+                  } else if (otherConfirmed.length) {
+                    tvInfo = `<span class="badge tv-free">📺 Frei (kein Parallelspiel)</span>`;
+                  }
+                  const hasWarnBox = ownCs.length > 0 || cs.length > 0;
+                  const pccKind = i.cls === 'm-perfect' ? 'pcc-perfect' : 'pcc-maybe';
                   return `
-                    <div class="prop-choice-card ${i.cls} ${cs.length ? 'has-conflict' : ''}">
+                    <div class="prop-choice-card ${pccKind} ${ownCs.length ? 'is-own-busy' : cs.length ? 'has-conflict' : ''}">
                       <div class="pcc-info">
-                        <b>${slotLabel(k)} Uhr</b>
-                        <div class="pcc-badges">${badge}${!cs.length ? tvInfo : ''}</div>
-                        ${cs.length ? tvInfo : ''}
+                        <b class="pcc-slot-title">${slotLabel(k)} Uhr</b>
+                        <div class="pcc-badges">${badge}${!hasWarnBox ? tvInfo : ''}</div>
+                        ${hasWarnBox ? tvInfo : ''}
                       </div>
-                      <button type="button" class="btn btn-primary pcc-confirm-btn" data-confirm-slot="${k}">
-                        ✓ Verbindlich bestätigen
+                      <button type="button" class="btn btn-primary pcc-confirm-btn" data-confirm-slot="${k}" ${ownCs.length ? 'disabled' : ''}>
+                        ${ownCs.length ? '🚫 Nicht wählbar (Eigenes Spiel)' : '✓ Verbindlich bestätigen'}
                       </button>
                     </div>`;
                 }).join('')}
@@ -936,7 +1225,7 @@
                   <p class="sched-sub">Folgende ${propSlots.length === 1 ? 'Termin wurde' : `${propSlots.length} Termine wurden`} vorgeschlagen. Sobald ein Spieler von <b>${esc(waitTeamName)}</b> einen davon bestätigt, steht das Match fest:</p>
                   <div class="pmh-prop-list">${propSlots.map((k) => {
                     const i = info(k);
-                    return `<span class="prop-chip lg">${slotLabel(k)} Uhr <small>(${i.cls === 'm-perfect' ? `${i.g}/${n} Grün` : `${i.g}✓ ${i.y}?`})</small>${conflictChipBadge(k)}</span>`;
+                    return `<span class="prop-chip prop-chip-lg"><b>${slotLabel(k)} Uhr</b> <small>(${i.cls === 'm-perfect' ? `${i.g}/${n} Grün` : `${i.g}✓ ${i.y}?`})</small>${conflictChipBadge(k)}</span>`;
                   }).join('')}</div>
                 </div>
               </div>
@@ -952,7 +1241,7 @@
         const isCounter = propSlots.length > 0 && myTeamId !== m.proposed_by_team_id;
         const isEdit = propSlots.length > 0 && myTeamId === m.proposed_by_team_id;
         const selectedWithConflicts = [...selectedPropose]
-          .map((k) => ({ k, cs: conflictsFor(k) }))
+          .map((k) => ({ k, cs: streamConflictsFor(k) }))
           .filter((x) => x.cs.length > 0);
 
         schedBoxHTML = `
@@ -978,10 +1267,13 @@
                     <div class="pick-chips">
                       ${perfect.map((k) => {
                         const sel = selectedPropose.has(k);
-                        const cs = conflictsFor(k);
-                        const confCls = cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
-                        return `<button type="button" class="slot-pick perfect ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${k}" title="${esc(conflictTitle(k))}" ${!mePlayer ? 'disabled' : ''}>
-                          <span class="sp-check">${sel ? '✓' : '+'}</span>
+                        const ownCs = ownConflictsFor(k);
+                        const cs = streamConflictsFor(k);
+                        const confCls = ownCs.length
+                          ? 'own-busy'
+                          : cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
+                        return `<button type="button" class="slot-pick perfect ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${k}" title="${esc(conflictTitle(k))}" ${!mePlayer || ownCs.length ? 'disabled' : ''}>
+                          <span class="sp-check">${ownCs.length ? '🚫' : sel ? '✓' : '+'}</span>
                           <span>${slotLabel(k)}</span>
                           ${conflictChipBadge(k)}
                         </button>`;
@@ -994,10 +1286,13 @@
                     <div class="pick-chips">
                       ${maybe.slice(0, 24).map((x) => {
                         const sel = selectedPropose.has(x.k);
-                        const cs = conflictsFor(x.k);
-                        const confCls = cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
-                        return `<button type="button" class="slot-pick maybe ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${x.k}" title="${esc(conflictTitle(x.k))}" ${!mePlayer ? 'disabled' : ''}>
-                          <span class="sp-check">${sel ? '✓' : '+'}</span>
+                        const ownCs = ownConflictsFor(x.k);
+                        const cs = streamConflictsFor(x.k);
+                        const confCls = ownCs.length
+                          ? 'own-busy'
+                          : cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
+                        return `<button type="button" class="slot-pick maybe ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${x.k}" title="${esc(conflictTitle(x.k))}" ${!mePlayer || ownCs.length ? 'disabled' : ''}>
+                          <span class="sp-check">${ownCs.length ? '🚫' : sel ? '✓' : '+'}</span>
                           <span>${slotLabel(x.k)} <small>(${x.g}✓ ${x.y}?)</small></span>
                           ${conflictChipBadge(x.k)}
                         </button>`;
@@ -1043,16 +1338,17 @@
             <span class="omb-icon">📺</span>
             <div class="omb-title">
               <b>Bereits festgelegte Spiele in diesem Zeitraum (${otherConfirmed.length})</b>
-              <small>Ein Spiel dauert bis zu 1,5 Std. – bitte bei der Terminfindung wenn möglich beachten, damit Spiele nicht parallel laufen und gestreamt/geschaut werden können.</small>
+              <small>Spiele mit Beteiligung eurer beiden Teams (🚫) sind inkl. ~1,5h Spielzeit automatisch gesperrt. Bei Spielen anderer Teams (📺) bitte wenn möglich ausweichen, damit gestreamt/geschaut werden kann.</small>
             </div>
           </div>
           <div class="omb-list">
             ${otherConfirmed.map((oc) => {
               const [, ohStr] = oc.confirmed_slot.split('|');
               const oh = Number(ohStr);
-              return `<div class="omb-chip">
-                <span class="omb-time">🏆 ${slotLabel(oc.confirmed_slot)} <small>(bis ~${pad2(oh + 1)}:30 Uhr)</small></span>
+              return `<div class="omb-chip ${oc.is_own_team ? 'own-busy' : ''}">
+                <span class="omb-time">${oc.is_own_team ? '🚫' : '🏆'} ${slotLabel(oc.confirmed_slot)} <small>(bis ~${pad2(oh + 1)}:30 Uhr)</small></span>
                 <span class="omb-teams">${esc(oc.team_a_name)} <i>vs.</i> ${esc(oc.team_b_name)}</span>
+                ${oc.is_own_team ? `<span class="badge danger sm">Eigenes Spiel (${esc(busyTeamNameOf(oc))})</span>` : ''}
               </div>`;
             }).join('')}
           </div>
@@ -1075,11 +1371,17 @@
           ${legend('match')}
           <div class="tool-actions"><span class="muted small" id="refresh-info"></span><button class="btn btn-ghost btn-sm" id="refresh-btn">⟳ Aktualisieren</button></div>
         </div>
-        <p class="hint small">Maus über ein Feld bewegen (am Handy antippen), um den Status aller ${n} Spieler sowie eventuelle Parallelspiele (📺) zu sehen.</p>
+        <p class="hint small">Maus über ein Feld bewegen (am Handy antippen), um den Status aller ${n} Spieler sowie eventuelle Parallelspiele (📺 / 🚫) zu sehen.</p>
         <div id="match-grid"></div>`;
 
       const togglePickSlot = (k) => {
         if (!mePlayer || m.confirmed_slot || !allSaved) return;
+        const ownCs = ownConflictsFor(k);
+        if (ownCs.length) {
+          const c = ownCs[0];
+          toast(`Nicht wählbar: ${busyTeamNameOf(c)} hat dort bereits ein festes Spiel (${c.team_a_name} vs. ${c.team_b_name}, ${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr).`, 'error');
+          return;
+        }
         const i = info(k);
         if (i.cls !== 'm-perfect' && i.cls !== 'm-maybe') {
           toast('Nur grüne oder gelbe Termine (ohne Rot) können vorgeschlagen werden.', 'error');
@@ -1100,7 +1402,13 @@
 
       const confirmChosenSlot = async (k) => {
         if (!mePlayer) return;
-        const cs = conflictsFor(k);
+        const ownCs = ownConflictsFor(k);
+        if (ownCs.length) {
+          const c = ownCs[0];
+          toast(`Nicht möglich: ${busyTeamNameOf(c)} hat dort bereits ein festes Spiel (${c.team_a_name} vs. ${c.team_b_name}).`, 'error');
+          return;
+        }
+        const cs = streamConflictsFor(k);
         const conflictWarnModal = cs.length ? `
           <div class="propose-conflict-alert" style="margin-top:10px">
             <span class="pca-icon">📺⚠️</span>
@@ -1152,7 +1460,7 @@
 
       body.querySelector('#edit-propose-btn')?.addEventListener('click', () => {
         selectedPropose.clear();
-        propSlots.forEach((s) => selectedPropose.add(s));
+        propSlots.filter((s) => !ownConflictsFor(s).length).forEach((s) => selectedPropose.add(s));
         proposeMode = true;
         render();
       });
@@ -1201,7 +1509,9 @@
         for (const d of dates) for (const h of HOURS) allSlots.push(key(d, h));
         const otherSlots = allSlots.filter((k) => !perfect.includes(k) && !maybe.some((x) => x.k === k));
         const optSuffix = (k) => {
-          const cs = conflictsFor(k);
+          const ownCs = ownConflictsFor(k);
+          if (ownCs.length) return ` [🚫 EIGENES SPIEL: ${busyTeamNameOf(ownCs[0])}]`;
+          const cs = streamConflictsFor(k);
           if (!cs.length) return '';
           return ` [📺⚠️ ${cs.some((c) => c.exact) ? 'Parallelspiel' : 'Überschneidung ~1,5h'}]`;
         };
@@ -1241,20 +1551,26 @@
           const isConf = m.confirmed_slot === k;
           const isProp = !m.confirmed_slot && propSlots.includes(k);
           const isSel = !m.confirmed_slot && selectedPropose.has(k);
-          const cs = conflictsFor(k);
+          const ownCs = ownConflictsFor(k);
+          const cs = streamConflictsFor(k);
           const hasExact = cs.some((c) => c.exact);
           let txt = i.cls === 'm-perfect' ? `${i.g}/${n}` : i.cls === 'm-maybe' ? `${i.g}✓ ${i.y}?` : n ? `${n - i.r}/${n}` : '–';
           if (isConf) txt = `🏆 FIX`;
           else if (isProp) txt = `📩 ${txt}`;
           else if (isSel) txt = `✓ ${txt}`;
-          const tvBadge = cs.length && !isConf
-            ? `<span class="tv-cell-badge ${hasExact ? 'exact' : 'overlap'}" title="${esc(conflictTitle(k))}">📺${hasExact ? cs.length : '~'}</span>`
-            : '';
+          let tvBadge = '';
+          if (!isConf) {
+            if (ownCs.length) {
+              tvBadge = `<span class="tv-cell-badge own-busy" title="${esc(conflictTitle(k))}">🚫</span>`;
+            } else if (cs.length) {
+              tvBadge = `<span class="tv-cell-badge ${hasExact ? 'exact' : 'overlap'}" title="${esc(conflictTitle(k))}">📺${hasExact ? cs.length : '~'}</span>`;
+            }
+          }
           const extraCls = [
             isConf ? 'is-confirmed' : '',
             isProp ? 'is-proposed' : '',
             isSel ? 'is-selected' : '',
-            cs.length ? (hasExact ? 'has-tv-exact' : 'has-tv-overlap') : '',
+            ownCs.length ? 'has-own-busy' : cs.length ? (hasExact ? 'has-tv-exact' : 'has-tv-overlap') : '',
           ].filter(Boolean).join(' ');
           return `<td class="cell mcell ${i.cls} ${extraCls}" data-k="${k}"><span class="mc">${txt}</span>${tvBadge}</td>`;
         },
@@ -1263,11 +1579,23 @@
       const showTip = (td) => {
         const k = td.dataset.k;
         const i = info(k);
-        const cs = conflictsFor(k);
+        const ownCs = ownConflictsFor(k);
+        const cs = streamConflictsFor(k);
         const row = (p) => { const s = statusOf(p.id, k); return `<li><i class="dot s-${s}"></i><span>${esc(p.name)}${p.id === highlightPlayer ? ' (du)' : ''}</span><b class="t-${s}">${hasSaved(p.id) ? STATUS_LABEL[s] : 'nicht eingetragen'}</b></li>`; };
         const verdict = m.confirmed_slot === k
           ? '<span class="t-green">🏆 Fester Spieltermin</span>'
-          : i.cls === 'm-perfect' ? '<span class="t-green">Perfekter Match-Termin</span>' : i.cls === 'm-maybe' ? '<span class="t-yellow">Mögliche Option</span>' : '<span class="t-red">Nicht möglich</span>';
+          : ownCs.length
+            ? '<span class="t-red">🚫 Gesperrt (Eigenes Spiel)</span>'
+            : i.cls === 'm-perfect' ? '<span class="t-green">Perfekter Match-Termin</span>' : i.cls === 'm-maybe' ? '<span class="t-yellow">Mögliche Option</span>' : '<span class="t-red">Nicht möglich</span>';
+
+        const tipOwnBusyHTML = ownCs.length ? `
+          <div class="tip-own-busy">
+            <b>🚫 Gesperrt – Eigenes Spiel (~1,5h Spielzeit):</b>
+            <ul>
+              ${ownCs.map((c) => `<li><b>${esc(busyTeamNameOf(c))}</b> spielt bereits: <b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (Start ${pad2(c.otherHour)}:00 Uhr, läuft bis ~${pad2(c.otherHour + 1)}:30 Uhr)</li>`).join('')}
+            </ul>
+            <small>Ein Team kann nicht zwei Spiele gleichzeitig bestreiten – dieser Zeitraum ist daher für Vorschläge gesperrt.</small>
+          </div>` : '';
 
         const tipConflictHTML = cs.length ? `
           <div class="tip-conflict">
@@ -1279,7 +1607,7 @@
           </div>` : '';
 
         let tipAction = '';
-        if (allSaved && !m.confirmed_slot && mePlayer && (i.cls === 'm-perfect' || i.cls === 'm-maybe')) {
+        if (allSaved && !m.confirmed_slot && mePlayer && !ownCs.length && (i.cls === 'm-perfect' || i.cls === 'm-maybe')) {
           if (propSlots.includes(k) && myTeamId !== m.proposed_by_team_id && !proposeMode) {
             tipAction = `<div class="tip-actions"><button type="button" class="btn btn-sm btn-primary btn-block" data-tip-confirm="${k}">✓ Diesen Termin verbindlich bestätigen</button></div>`;
           } else if (propSlots.length === 0 || proposeMode) {
@@ -1290,6 +1618,7 @@
 
         tip.innerHTML = `
           <div class="tip-head"><b>${slotLabel(k)}</b>${verdict}</div>
+          ${tipOwnBusyHTML}
           ${tipConflictHTML}
           <div class="tip-teams">
             <div><h5>${esc(data.teamA.name)}</h5><ul>${data.teamA.players.map(row).join('')}</ul></div>

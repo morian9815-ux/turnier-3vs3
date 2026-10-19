@@ -87,6 +87,48 @@ function formatMatchup(m) {
   };
 }
 
+const WEEKDAYS_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+function formatSlotLabel(slotKey) {
+  if (!slotKey || !String(slotKey).includes('|')) return String(slotKey || '');
+  const [d, hStr] = String(slotKey).split('|');
+  const [y, m, day] = d.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day));
+  const wd = WEEKDAYS_SHORT[dt.getUTCDay()] || '';
+  const hh = String(Number(hStr)).padStart(2, '0');
+  return `${wd}, ${String(day).padStart(2, '0')}.${String(m).padStart(2, '0')}. · ${hh}:00 Uhr`;
+}
+
+function formatSlotsList(slots) {
+  return (slots || []).map(formatSlotLabel).join(' / ');
+}
+
+async function createNotifications(runner, recipientIds, { kind, title, body, phase_id = null, matchup_id = null, created_at = null }) {
+  const uniqueIds = [...new Set((recipientIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!uniqueIds.length) return;
+  const ts = created_at || new Date().toISOString();
+  for (const pid of uniqueIds) {
+    await runner.run(
+      `INSERT INTO notifications (player_id, kind, title, body, phase_id, matchup_id, is_read, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      [pid, kind, title, body, phase_id, matchup_id, ts]
+    );
+  }
+}
+
+async function loadPlayerNotifications(pid) {
+  const rows = await db.all(
+    `SELECT id, player_id, kind, title, body, phase_id, matchup_id, is_read, created_at
+     FROM notifications
+     WHERE player_id = ?
+     ORDER BY is_read ASC, id DESC
+     LIMIT 60`,
+    [pid]
+  );
+  const notifications = rows.map((r) => ({ ...r, is_read: Boolean(r.is_read) }));
+  const unreadCount = notifications.reduce((acc, n) => acc + (n.is_read ? 0 : 1), 0);
+  return { notifications, unreadCount };
+}
+
 async function loadMatchupContext(mid) {
   const raw = await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid]);
   if (!raw) throw notFound('Paarung nicht gefunden.');
@@ -133,13 +175,34 @@ async function loadMatchupContext(mid) {
       const [d] = String(x.confirmed_slot || '').split('|');
       return validDates.has(d);
     })
-    .map((x) => ({
-      id: x.id,
-      phase_id: x.phase_id,
-      team_a_name: x.team_a_name,
-      team_b_name: x.team_b_name,
-      confirmed_slot: x.confirmed_slot,
-    }));
+    .map((x) => {
+      const isOwn = x.team_a_id === m.team_a_id || x.team_b_id === m.team_a_id
+        || x.team_a_id === m.team_b_id || x.team_b_id === m.team_b_id;
+      return {
+        id: x.id,
+        phase_id: x.phase_id,
+        team_a_id: x.team_a_id,
+        team_b_id: x.team_b_id,
+        team_a_name: x.team_a_name,
+        team_b_name: x.team_b_name,
+        confirmed_slot: x.confirmed_slot,
+        is_own_team: isOwn,
+      };
+    });
+
+  // Prüft, ob eines der beiden beteiligten Teams zur selben Zeit (inkl. ±1h wegen 1,5h Spieldauer) bereits ein eigenes festes Spiel hat
+  const ownTeamConflict = (slotKey) => {
+    if (typeof slotKey !== 'string' || !slotKey.includes('|')) return null;
+    const [d, hStr] = slotKey.split('|');
+    const h = Number(hStr);
+    for (const oc of otherConfirmed) {
+      if (!oc.is_own_team || !oc.confirmed_slot) continue;
+      const [od, ohStr] = oc.confirmed_slot.split('|');
+      const oh = Number(ohStr);
+      if (od === d && Math.abs(h - oh) <= 1) return oc;
+    }
+    return null;
+  };
 
   return {
     matchup: m,
@@ -151,6 +214,7 @@ async function loadMatchupContext(mid) {
     allSaved,
     checkSlot,
     otherConfirmed,
+    ownTeamConflict,
   };
 }
 
@@ -218,7 +282,33 @@ app.get('/api/players/:id', wrap(async (req, res) => {
     ? await db.all(`${MATCHUP_SELECT} WHERE m.team_a_id = ? OR m.team_b_id = ? ORDER BY m.id`, [player.team_id, player.team_id])
     : [];
   const saved = await db.all('SELECT DISTINCT phase_id FROM availabilities WHERE player_id = ?', [pid]);
-  res.json({ player, teammates, matchups: rawMatchups.map(formatMatchup), savedPhases: saved.map((r) => r.phase_id) });
+  const { notifications, unreadCount } = await loadPlayerNotifications(pid);
+  res.json({
+    player,
+    teammates,
+    matchups: rawMatchups.map(formatMatchup),
+    savedPhases: saved.map((r) => r.phase_id),
+    notifications,
+    unreadCount,
+  });
+}));
+
+app.get('/api/players/:id/notifications', wrap(async (req, res) => {
+  const pid = toId(req.params.id);
+  res.json(await loadPlayerNotifications(pid));
+}));
+
+app.post('/api/players/:id/notifications/read-all', wrap(async (req, res) => {
+  const pid = toId(req.params.id);
+  await db.run('UPDATE notifications SET is_read = 1 WHERE player_id = ? AND is_read = 0', [pid]);
+  res.json(await loadPlayerNotifications(pid));
+}));
+
+app.post('/api/players/:id/notifications/:notifId/read', wrap(async (req, res) => {
+  const pid = toId(req.params.id);
+  const nid = toId(req.params.notifId);
+  await db.run('UPDATE notifications SET is_read = 1 WHERE id = ? AND player_id = ?', [nid, pid]);
+  res.json(await loadPlayerNotifications(pid));
 }));
 
 app.get('/api/players/:id/availability/:phaseId', wrap(async (req, res) => {
@@ -235,10 +325,13 @@ app.put('/api/players/:id/availability/:phaseId', wrap(async (req, res) => {
   const pid = toId(req.params.id);
   const phase = getPhase(req.params.phaseId);
   if (!phase) throw notFound('Unbekannte Phase.');
-  const player = await db.get('SELECT id FROM players WHERE id = ?', [pid]);
+  const player = await db.get('SELECT id, name, team_id FROM players WHERE id = ?', [pid]);
   if (!player) throw notFound('Spieler nicht gefunden.');
   const input = Array.isArray(req.body?.cells) ? req.body.cells : null;
   if (!input) throw bad('Keine Kalenderdaten übermittelt.');
+
+  const prevRow = await db.get('SELECT 1 AS ok FROM availabilities WHERE player_id = ? AND phase_id = ? LIMIT 1', [pid, phase.id]);
+  const hadSavedBefore = Boolean(prevRow);
 
   const dates = phaseDates(phase);
   const dateSet = new Set(dates);
@@ -259,6 +352,45 @@ app.put('/api/players/:id/availability/:phaseId', wrap(async (req, res) => {
     const placeholders = rows.map(() => '(?, ?, ?, ?, ?)').join(', ');
     await q.run(`INSERT INTO availabilities (player_id, phase_id, date, hour, status) VALUES ${placeholders}`, rows.flat());
   });
+
+  // Benachrichtigungen für Mitspieler & ggf. Paarungen, bei denen jetzt alle 6 Spieler fertig sind:
+  if (player.team_id) {
+    const teammates = await db.all('SELECT id FROM players WHERE team_id = ? AND id <> ?', [player.team_id, pid]);
+    const tmIds = teammates.map((t) => t.id);
+    const phaseMatchups = await db.all(
+      `${MATCHUP_SELECT} WHERE m.phase_id = ? AND (m.team_a_id = ? OR m.team_b_id = ?) ORDER BY m.id`,
+      [phase.id, player.team_id, player.team_id]
+    );
+    const firstMatchupId = phaseMatchups[0]?.id || null;
+
+    if (tmIds.length) {
+      await createNotifications(db, tmIds, {
+        kind: 'teammate_availability',
+        title: `Mitspieler ${player.name} hat Zeiten ${hadSavedBefore ? 'aktualisiert' : 'eingetragen'}`,
+        body: `Dein Mitspieler ${player.name} hat seine Verfügbarkeiten für „${phase.name}“ gespeichert.`,
+        phase_id: phase.id,
+        matchup_id: firstMatchupId,
+      });
+    }
+
+    // Wenn dieser Spieler zum ersten Mal für diese Phase gespeichert hat, prüfen ob jetzt alle 6 Spieler einer Paarung fertig sind
+    if (!hadSavedBefore && phaseMatchups.length) {
+      for (const m of phaseMatchups) {
+        const ctx = await loadMatchupContext(m.id);
+        if (ctx.allSaved && !ctx.matchup.confirmed_slot) {
+          const otherFiveIds = ctx.players.filter((p) => p.id !== pid).map((p) => p.id);
+          await createNotifications(db, otherFiveIds, {
+            kind: 'all_6_ready',
+            title: `Alle 6 Spieler bereit: ${m.team_a_name} vs. ${m.team_b_name}`,
+            body: `Alle 6 Spieler haben ihre Zeiten für „${phase.name}“ eingetragen! Ihr könnt euch ab sofort im Match-Abgleich auf einen Spieltermin einigen.`,
+            phase_id: phase.id,
+            matchup_id: m.id,
+          });
+        }
+      }
+    }
+  }
+
   const counts = { green: 0, yellow: 0, red: 0 };
   rows.forEach((r) => counts[r[4]]++);
   res.json({ ok: true, saved: true, counts });
@@ -304,12 +436,60 @@ app.post('/api/matchups/:id/propose', wrap(async (req, res) => {
     if (st !== 'perfect' && st !== 'maybe') {
       throw bad('Es dürfen nur perfekte (alle Grün) oder mögliche (Grün/Gelb) Termine vorgeschlagen werden.');
     }
+    const ownBusy = ctx.ownTeamConflict(s);
+    if (ownBusy) {
+      const busyTeam = (ownBusy.team_a_id === m.team_a_id || ownBusy.team_b_id === m.team_a_id) ? m.team_a_name : m.team_b_name;
+      throw bad(`Nicht möglich: ${busyTeam} hat zu dieser Zeit (inkl. ~1,5h Spielzeit) bereits ein eigenes festes Spiel (${ownBusy.team_a_name} vs. ${ownBusy.team_b_name}).`);
+    }
   }
+
+  const wasCounterProposal = Boolean(m.proposed_slots.length && m.proposed_by_team_id && m.proposed_by_team_id !== player.team_id);
+  const myTeamName = player.team_id === m.team_a_id ? m.team_a_name : m.team_b_name;
+  const oppTeamName = player.team_id === m.team_a_id ? m.team_b_name : m.team_a_name;
+  const phaseName = ctx.phase ? ctx.phase.name : m.phase_id;
+  const slotsText = formatSlotsList(slots);
 
   await db.run(
     'UPDATE matchups SET proposed_slots = ?, proposed_by_team_id = ?, proposed_by_player_name = ? WHERE id = ?',
     [JSON.stringify(slots), player.team_id, player.name, mid]
   );
+
+  // Empfänger: Gegnerisches Team (alle 3 Spieler) + eigene Mitspieler (ohne den absendenden Spieler selbst)
+  const oppIds = ctx.players.filter((p) => p.team_id !== player.team_id).map((p) => p.id);
+  const mateIds = ctx.players.filter((p) => p.team_id === player.team_id && p.id !== pid).map((p) => p.id);
+
+  if (wasCounterProposal) {
+    await createNotifications(db, oppIds, {
+      kind: 'counter_proposal',
+      title: `Gegenvorschlag von ${myTeamName}`,
+      body: `${player.name} (${myTeamName}) hat für euer Match in „${phaseName}“ ${slots.length === 1 ? 'einen neuen Termin' : `${slots.length} neue Termine`} vorgeschlagen: ${slotsText}. Bitte bestätigen oder Gegenvorschlag senden!`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
+    await createNotifications(db, mateIds, {
+      kind: 'teammate_proposed',
+      title: `Gegenvorschlag an ${oppTeamName} gesendet`,
+      body: `Dein Mitspieler ${player.name} hat ${oppTeamName} einen Gegenvorschlag (${slotsText}) für „${phaseName}“ geschickt.`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
+  } else {
+    await createNotifications(db, oppIds, {
+      kind: 'proposal_received',
+      title: `Terminvorschlag von ${myTeamName}`,
+      body: `${player.name} (${myTeamName}) hat euch ${slots.length === 1 ? '1 Terminvorschlag' : `${slots.length} Terminvorschläge`} für „${phaseName}“ geschickt: ${slotsText}. Bitte wählt einen Termin aus oder sendet einen Gegenvorschlag!`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
+    await createNotifications(db, mateIds, {
+      kind: 'teammate_proposed',
+      title: `Mitspieler ${player.name} hat Termine vorgeschlagen`,
+      body: `Dein Mitspieler ${player.name} hat ${oppTeamName} folgende Termine für „${phaseName}“ vorgeschlagen: ${slotsText}.`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
+  }
+
   res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
 }));
 
@@ -337,11 +517,31 @@ app.post('/api/matchups/:id/confirm', wrap(async (req, res) => {
   if (!m.proposed_slots.includes(slot)) {
     throw bad('Dieser Termin gehört nicht zu den vorgeschlagenen Terminen.');
   }
+  const ownBusy = ctx.ownTeamConflict(slot);
+  if (ownBusy) {
+    const busyTeam = (ownBusy.team_a_id === m.team_a_id || ownBusy.team_b_id === m.team_a_id) ? m.team_a_name : m.team_b_name;
+    throw bad(`Nicht möglich: ${busyTeam} hat zu dieser Zeit (inkl. ~1,5h Spielzeit) bereits ein eigenes festes Spiel (${ownBusy.team_a_name} vs. ${ownBusy.team_b_name}).`);
+  }
 
   await db.run(
     'UPDATE matchups SET confirmed_slot = ?, confirmed_by_player_name = ? WHERE id = ?',
     [slot, player.name, mid]
   );
+
+  // Alle 5 anderen Spieler der Paarung (eigene Mitspieler + Gegner) erhalten eine Erfolgs-Nachricht
+  const otherFiveIds = ctx.players.filter((p) => p.id !== pid).map((p) => p.id);
+  const myTeamName = player.team_id === m.team_a_id ? m.team_a_name : m.team_b_name;
+  const phaseName = ctx.phase ? ctx.phase.name : m.phase_id;
+  const slotFormatted = formatSlotLabel(slot);
+
+  await createNotifications(db, otherFiveIds, {
+    kind: 'match_confirmed',
+    title: `Fester Spieltermin bestätigt: ${m.team_a_name} vs. ${m.team_b_name}`,
+    body: `${player.name} (${myTeamName}) hat den Terminvorschlag angenommen! Euer Match in „${phaseName}“ findet verbindlich am ${slotFormatted} statt.`,
+    phase_id: m.phase_id,
+    matchup_id: mid,
+  });
+
   res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
 }));
 
@@ -463,6 +663,9 @@ app.put('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
 app.put('/api/matchups/:id/schedule', requireAdmin, wrap(async (req, res) => {
   const mid = toId(req.params.id);
   const ctx = await loadMatchupContext(mid);
+  const { matchup: m } = ctx;
+  const phaseName = ctx.phase ? ctx.phase.name : m.phase_id;
+  const allPlayerIds = ctx.players.map((p) => p.id);
   const action = req.body?.action;
   if (action === 'reset') {
     await db.run(
@@ -472,6 +675,13 @@ app.put('/api/matchups/:id/schedule', requireAdmin, wrap(async (req, res) => {
        WHERE id = ?`,
       [mid]
     );
+    await createNotifications(db, allPlayerIds, {
+      kind: 'match_reset',
+      title: `Termin zurückgesetzt: ${m.team_a_name} vs. ${m.team_b_name}`,
+      body: `Der Termin bzw. Vorschlag für euer Match in „${phaseName}“ wurde vom Admin zurückgesetzt. Bitte stimmt euch im Match-Abgleich neu ab.`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
   } else if (action === 'set') {
     const slot = String(req.body?.slot || '');
     const st = ctx.checkSlot(slot);
@@ -482,6 +692,13 @@ app.put('/api/matchups/:id/schedule', requireAdmin, wrap(async (req, res) => {
        WHERE id = ?`,
       [slot, mid]
     );
+    await createNotifications(db, allPlayerIds, {
+      kind: 'match_confirmed',
+      title: `Fester Spieltermin festgelegt: ${m.team_a_name} vs. ${m.team_b_name}`,
+      body: `Die Turnierleitung (Admin) hat euer Match in „${phaseName}“ verbindlich auf ${formatSlotLabel(slot)} festgelegt.`,
+      phase_id: m.phase_id,
+      matchup_id: mid,
+    });
   } else {
     throw bad('Unbekannte Aktion.');
   }

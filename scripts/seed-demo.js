@@ -22,11 +22,26 @@ function createRng(seed = 20261109) {
   };
 }
 
+const WEEKDAYS_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+function fmtSlot(slotKey) {
+  if (!slotKey || !String(slotKey).includes('|')) return String(slotKey || '');
+  const [d, hStr] = String(slotKey).split('|');
+  const [y, m, day] = d.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day));
+  const wd = WEEKDAYS_SHORT[dt.getUTCDay()] || '';
+  const hh = String(Number(hStr)).padStart(2, '0');
+  return `${wd}, ${String(day).padStart(2, '0')}.${String(m).padStart(2, '0')}. · ${hh}:00 Uhr`;
+}
+
 async function seedDemoData(db, { force = false } = {}) {
   const existingTeams = await db.all('SELECT id FROM teams');
   const existingMatchups = await db.all('SELECT id FROM matchups');
+  let existingNotifs = [];
+  try {
+    existingNotifs = await db.all('SELECT id FROM notifications LIMIT 1');
+  } catch { /* Tabelle ggf. neu */ }
 
-  if (!force && existingTeams.length > 0 && existingMatchups.length >= SEED_MIN_MATCHUPS) {
+  if (!force && existingTeams.length > 0 && existingMatchups.length >= SEED_MIN_MATCHUPS && existingNotifs.length > 0) {
     console.log('Multi-Szenario-Testdaten sind bereits vorhanden – bestehende Daten bleiben erhalten.');
     return { ok: true, skipped: true };
   }
@@ -35,10 +50,12 @@ async function seedDemoData(db, { force = false } = {}) {
 
   return await db.tx(async (tx) => {
     // Vorhandene Daten sauber zurücksetzen, falls ein älterer Stand oder force=true vorliegt
+    try { await tx.run('DELETE FROM notifications'); } catch { /* ignore */ }
     await tx.run('DELETE FROM availabilities');
     await tx.run('DELETE FROM matchups');
     await tx.run('DELETE FROM players');
     await tx.run('DELETE FROM teams');
+    try { await tx.run('DELETE FROM sqlite_sequence'); } catch { /* PostgreSQL nutzt eigene Sequenzen */ }
 
     const createdTeams = [];
     let playerCount = 0;
@@ -54,6 +71,16 @@ async function seedDemoData(db, { force = false } = {}) {
       }
       createdTeams.push({ id: t.id, name, players: pObjs });
     }
+
+    const addNotifs = async (playerIds, { kind, title, body, phase_id, matchup_id, is_read = 0, created_at }) => {
+      for (const pid of playerIds) {
+        await tx.run(
+          `INSERT INTO notifications (player_id, kind, title, body, phase_id, matchup_id, is_read, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [pid, kind, title, body, phase_id, matchup_id, is_read ? 1 : 0, created_at]
+        );
+      }
+    };
 
     // Garantierte gemeinsame Abend-Slots für Woche 1 und Woche 2, damit jede Paarung
     // sowohl perfekte (6/6 Grün) als auch mögliche (Grün + Gelb) Termine hat:
@@ -168,8 +195,6 @@ async function seedDemoData(db, { force = false } = {}) {
     // -------------------------------------------------------------------------
     // SZENARIO 1 (w1-group, 9 Paarungen):
     // 🏆 Fester Spieltermin steht bereits verbindlich fest (Team-Handshake abgeschlossen)
-    // Jedes der 18 Teams hat hier genau 1 fest terminiertes Match.
-    // Gleichzeitig dienen diese 9 Termine als Live-Daten für den 📺 Stream- & Parallelspiel-Radar!
     // -------------------------------------------------------------------------
     const w1ConfirmedSlots = [
       '2026-11-10|20', // Di, 10.11. 20:00
@@ -187,12 +212,12 @@ async function seedDemoData(db, { force = false } = {}) {
       const teamB = createdTeams[i + 1];
       const chosen = w1ConfirmedSlots[i / 2];
       const propList = [chosen, '2026-11-10|19', '2026-11-14|20'].filter((v, idx, arr) => arr.indexOf(v) === idx).slice(0, 3);
-      await tx.run(
+      const mRow = await tx.get(
         `INSERT INTO matchups (
           phase_id, team_a_id, team_b_id,
           proposed_slots, proposed_by_team_id, proposed_by_player_name,
           confirmed_slot, confirmed_by_player_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         [
           'w1-group',
           teamA.id,
@@ -205,35 +230,67 @@ async function seedDemoData(db, { force = false } = {}) {
         ]
       );
       matchupCount++;
+
+      // Bereits gelesene ältere Historien-Nachricht (Terminvorschlag vor der Bestätigung):
+      const allSixIds = [...teamA.players.map((p) => p.id), ...teamB.players.map((p) => p.id)];
+      await addNotifs(allSixIds, {
+        kind: 'teammate_availability',
+        title: `Gruppenphase · Woche 1: Zeiten von ${teamA.players[0].name} gespeichert`,
+        body: `${teamA.players[0].name} (${teamA.name}) hat seine Verfügbarkeiten für „Gruppenphase · Woche 1“ eingetragen.`,
+        phase_id: 'w1-group',
+        matchup_id: mRow.id,
+        is_read: 1,
+        created_at: '2026-11-07T16:20:00.000Z',
+      });
+
+      // Ungelesene Bestätigungs-Nachricht (🎉 Grün) für alle außer dem bestätigenden Spieler (teamB.players[0]);
+      // für teamB.players[0] als gelesen hinterlegen, da er selbst bestätigt hat:
+      const otherFive = allSixIds.filter((id) => id !== teamB.players[0].id);
+      await addNotifs(otherFive, {
+        kind: 'match_confirmed',
+        title: `Fester Spieltermin bestätigt: ${teamA.name} vs. ${teamB.name}`,
+        body: `${teamB.players[0].name} (${teamB.name}) hat den Terminvorschlag angenommen! Euer Match in „Gruppenphase · Woche 1“ findet verbindlich am ${fmtSlot(chosen)} statt.`,
+        phase_id: 'w1-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T18:15:00.000Z',
+      });
     }
 
     // -------------------------------------------------------------------------
     // SZENARIO 2 (w1-group, 9 Paarungen):
     // 🤝 Alle 6 Spieler haben eingetragen – Termin-Einigung bereit (noch kein Vorschlag gesendet)
-    // Jedes Team kann hier sofort selbst 1–3 Termine anklicken, den 📺 Stream-Radar
-    // (mit Parallelspiel- und 1,5h-Überschneidungs-Hinweisen) testen und einen Vorschlag absenden.
     // -------------------------------------------------------------------------
     const scen2Pairs = [
       [1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 0],
     ];
     for (const [idxA, idxB] of scen2Pairs) {
-      await tx.run(
-        'INSERT INTO matchups (phase_id, team_a_id, team_b_id) VALUES (?, ?, ?)',
-        ['w1-group', createdTeams[idxA].id, createdTeams[idxB].id]
+      const teamA = createdTeams[idxA];
+      const teamB = createdTeams[idxB];
+      const mRow = await tx.get(
+        'INSERT INTO matchups (phase_id, team_a_id, team_b_id) VALUES (?, ?, ?) RETURNING id',
+        ['w1-group', teamA.id, teamB.id]
       );
       matchupCount++;
+
+      // Ungelesene Nachricht (🔓 Blau): Alle 6 Spieler bereit!
+      const allSixIds = [...teamA.players.map((p) => p.id), ...teamB.players.map((p) => p.id)];
+      await addNotifs(allSixIds, {
+        kind: 'all_6_ready',
+        title: `Alle 6 Spieler bereit: ${teamA.name} vs. ${teamB.name}`,
+        body: `Alle 6 Spieler haben ihre Zeiten für „Gruppenphase · Woche 1“ eingetragen! Ihr könnt euch ab sofort im Match-Abgleich auf einen Spieltermin einigen.`,
+        phase_id: 'w1-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T19:40:00.000Z',
+      });
     }
 
     // -------------------------------------------------------------------------
     // SZENARIO 3 & 4 (w2-group, 18 Paarungen + 2 feste Showcase-Spiele für den Stream-Radar):
     // 📩 Eingehender Terminvorschlag vom Gegner (Bestätigen oder Gegenvorschlag testen)
     // ⏳ Eigener gesendeter Terminvorschlag (Wartet auf Antwort vom Gegner / Vorschlag ändern)
-    // Durch zwei versetzte Runden in Woche 2 hat JEDES der 18 Teams:
-    //   - 1 Spiel mit eingehendem Vorschlag vom Gegner (📩)
-    //   - 1 Spiel mit eigenem ausgehendem Vorschlag an den Gegner (⏳)
     // -------------------------------------------------------------------------
-    // 2 bereits bestätigte Spiele in Woche 2, damit auch bei den Vorschlägen in Woche 2
-    // sofort der 📺 Stream-Radar ("📺 Frei" vs. "📺⚠️ Parallelspiel / ~1,5h") sichtbar ist:
     const w2ShowcaseConfirmed = [
       { a: 0, b: 9, slot: '2026-11-17|20' },  // Di, 17.11. 20:00
       { a: 4, b: 13, slot: '2026-11-18|20' }, // Mi, 18.11. 20:00
@@ -261,27 +318,35 @@ async function seedDemoData(db, { force = false } = {}) {
       matchupCount++;
     }
 
+    const pickW2Proposals = (aIdx, bIdx, defList) => {
+      if (aIdx === 0 || bIdx === 0 || aIdx === 9 || bIdx === 9) {
+        return ['2026-11-18|20', '2026-11-20|20', '2026-11-22|19'];
+      }
+      if (aIdx === 4 || bIdx === 4 || aIdx === 13 || bIdx === 13) {
+        return ['2026-11-17|20', '2026-11-19|20', '2026-11-21|20'];
+      }
+      return defList;
+    };
+
     // Runde 2A: Gerade Teams (0, 2, ..., 16) schlagen 3 Termine an ungerade Teams (3, 5, ..., 1) vor
-    // -> Ungerade Teams sehen 📩 Eingehenden Vorschlag (3 Termine zur Auswahl)
-    // -> Gerade Teams sehen ⏳ Eigenen gesendeten Vorschlag
     const round2APairs = [
       [0, 3], [2, 5], [4, 7], [6, 9], [8, 11], [10, 13], [12, 15], [14, 17], [16, 1],
     ];
     const proposals2A = [
-      ['2026-11-17|20', '2026-11-19|20', '2026-11-21|20'], // 17.11. 20:00 hat Parallelspiel, 19.11. & 21.11. sind frei!
-      ['2026-11-16|20', '2026-11-17|19', '2026-11-20|20'], // 17.11. 19:00 hat ~1,5h Überschneidung, andere frei!
+      ['2026-11-17|20', '2026-11-19|20', '2026-11-21|20'],
+      ['2026-11-16|20', '2026-11-17|19', '2026-11-20|20'],
       ['2026-11-18|20', '2026-11-20|19', '2026-11-22|20'],
     ];
     for (let idx = 0; idx < round2APairs.length; idx++) {
       const [aIdx, bIdx] = round2APairs[idx];
       const teamA = createdTeams[aIdx];
       const teamB = createdTeams[bIdx];
-      const slots = proposals2A[idx % proposals2A.length];
-      await tx.run(
+      const slots = pickW2Proposals(aIdx, bIdx, proposals2A[idx % proposals2A.length]);
+      const mRow = await tx.get(
         `INSERT INTO matchups (
           phase_id, team_a_id, team_b_id,
           proposed_slots, proposed_by_team_id, proposed_by_player_name
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
         [
           'w2-group',
           teamA.id,
@@ -292,16 +357,37 @@ async function seedDemoData(db, { force = false } = {}) {
         ]
       );
       matchupCount++;
+
+      const slotsTxt = slots.map(fmtSlot).join(' / ');
+      // Gegner (teamB) bekommt 📩 Terminvorschlag erhalten (ungelesen):
+      await addNotifs(teamB.players.map((p) => p.id), {
+        kind: 'proposal_received',
+        title: `Terminvorschlag von ${teamA.name}`,
+        body: `${teamA.players[0].name} (${teamA.name}) hat euch 3 Terminvorschläge für „Gruppenphase · Woche 2“ geschickt: ${slotsTxt}. Bitte wählt einen Termin aus oder sendet einen Gegenvorschlag!`,
+        phase_id: 'w2-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T21:10:00.000Z',
+      });
+      // Eigene Mitspieler von teamA.players[0] bekommen 👥 Mitspieler-Vorschlag (ungelesen):
+      const teamAMates = teamA.players.slice(1).map((p) => p.id);
+      await addNotifs(teamAMates, {
+        kind: 'teammate_proposed',
+        title: `Mitspieler ${teamA.players[0].name} hat Termine vorgeschlagen`,
+        body: `Dein Mitspieler ${teamA.players[0].name} hat ${teamB.name} folgende Termine für „Gruppenphase · Woche 2“ vorgeschlagen: ${slotsTxt}.`,
+        phase_id: 'w2-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T20:30:00.000Z',
+      });
     }
 
     // Runde 2B: Ungerade Teams (1, 3, ..., 17) schlagen 3 Termine an gerade Teams (4, 6, ..., 2) vor
-    // -> Gerade Teams sehen 📩 Eingehenden Vorschlag (3 Termine zur Auswahl)
-    // -> Ungerade Teams sehen ⏳ Eigenen gesendeten Vorschlag
     const round2BPairs = [
       [1, 4], [3, 6], [5, 8], [7, 10], [9, 12], [11, 14], [13, 16], [15, 0], [17, 2],
     ];
     const proposals2B = [
-      ['2026-11-18|20', '2026-11-20|20', '2026-11-22|19'], // 18.11. 20:00 hat Parallelspiel, 20.11. & 22.11. sind frei!
+      ['2026-11-18|20', '2026-11-20|20', '2026-11-22|19'],
       ['2026-11-17|20', '2026-11-19|21', '2026-11-21|19'],
       ['2026-11-16|20', '2026-11-18|19', '2026-11-22|20'],
     ];
@@ -309,12 +395,12 @@ async function seedDemoData(db, { force = false } = {}) {
       const [aIdx, bIdx] = round2BPairs[idx];
       const teamA = createdTeams[aIdx];
       const teamB = createdTeams[bIdx];
-      const slots = proposals2B[idx % proposals2B.length];
-      await tx.run(
+      const slots = pickW2Proposals(aIdx, bIdx, proposals2B[idx % proposals2B.length]);
+      const mRow = await tx.get(
         `INSERT INTO matchups (
           phase_id, team_a_id, team_b_id,
           proposed_slots, proposed_by_team_id, proposed_by_player_name
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
         [
           'w2-group',
           teamA.id,
@@ -325,26 +411,66 @@ async function seedDemoData(db, { force = false } = {}) {
         ]
       );
       matchupCount++;
+
+      const slotsTxt = slots.map(fmtSlot).join(' / ');
+      // Gegner (teamB) bekommt 📩 Terminvorschlag erhalten (ungelesen):
+      await addNotifs(teamB.players.map((p) => p.id), {
+        kind: 'proposal_received',
+        title: `Terminvorschlag von ${teamA.name}`,
+        body: `${teamA.players[0].name} (${teamA.name}) hat euch 3 Terminvorschläge für „Gruppenphase · Woche 2“ geschickt: ${slotsTxt}. Bitte wählt einen Termin aus oder sendet einen Gegenvorschlag!`,
+        phase_id: 'w2-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T21:15:00.000Z',
+      });
+      // Eigene Mitspieler von teamA.players[0] bekommen 👥 Mitspieler-Vorschlag (ungelesen):
+      const teamAMates = teamA.players.slice(1).map((p) => p.id);
+      await addNotifs(teamAMates, {
+        kind: 'teammate_proposed',
+        title: `Mitspieler ${teamA.players[0].name} hat Termine vorgeschlagen`,
+        body: `Dein Mitspieler ${teamA.players[0].name} hat ${teamB.name} folgende Termine für „Gruppenphase · Woche 2“ vorgeschlagen: ${slotsTxt}.`,
+        phase_id: 'w2-group',
+        matchup_id: mRow.id,
+        is_read: 0,
+        created_at: '2026-11-08T20:35:00.000Z',
+      });
     }
 
     // -------------------------------------------------------------------------
     // SZENARIO 5 (w3-r16, Achtelfinale · Woche 3, 9 Paarungen):
     // ⚠️ Noch nicht alle 6 Spieler haben ihre Zeiten eingetragen (4/6 abgestimmt)
-    // Zeigt die Wartesperre der Termin-Einigung inkl. namentlicher Anzeige der fehlenden Spieler.
     // -------------------------------------------------------------------------
     const scen5Pairs = [
       [0, 5], [1, 6], [2, 7], [3, 8], [4, 9], [10, 15], [11, 16], [12, 17], [13, 14],
     ];
     for (const [idxA, idxB] of scen5Pairs) {
-      await tx.run(
-        'INSERT INTO matchups (phase_id, team_a_id, team_b_id) VALUES (?, ?, ?)',
-        ['w3-r16', createdTeams[idxA].id, createdTeams[idxB].id]
+      const teamA = createdTeams[idxA];
+      const teamB = createdTeams[idxB];
+      const mRow = await tx.get(
+        'INSERT INTO matchups (phase_id, team_a_id, team_b_id) VALUES (?, ?, ?) RETURNING id',
+        ['w3-r16', teamA.id, teamB.id]
       );
       matchupCount++;
+
+      // Für Spieler[0] jedes Teams eine ungelesene Mitspieler-Nachricht von Spieler[1] in Woche 3,
+      // damit auch Spieler[0] eine Team-Aktivitäts-Nachricht hat:
+      for (const t of [teamA, teamB]) {
+        if (t.players.length >= 2) {
+          await addNotifs([t.players[0].id], {
+            kind: 'teammate_availability',
+            title: `Mitspieler ${t.players[1].name} hat Zeiten eingetragen`,
+            body: `Dein Mitspieler ${t.players[1].name} hat seine Verfügbarkeiten für „Achtelfinale · Woche 3“ gespeichert.`,
+            phase_id: 'w3-r16',
+            matchup_id: mRow.id,
+            is_read: 0,
+            created_at: '2026-11-08T20:05:00.000Z',
+          });
+        }
+      }
     }
 
     console.log(
-      `Multi-Szenario-Initialisierung abgeschlossen: ${createdTeams.length} Teams, ${playerCount} Spieler, ${matchupCount} Paarungen (alle 5 Szenarien für jedes Team aktiv).`
+      `Multi-Szenario-Initialisierung abgeschlossen: ${createdTeams.length} Teams, ${playerCount} Spieler, ${matchupCount} Paarungen (inkl. Nachrichtenzentrale für alle Spieler).`
     );
     return { ok: true, teams: createdTeams.length, players: playerCount, matchups: matchupCount };
   });
