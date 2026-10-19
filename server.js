@@ -67,10 +67,92 @@ function requireAdmin(req, res, next) {
 }
 
 const MATCHUP_SELECT = `
-  SELECT m.id, m.phase_id, m.team_a_id, m.team_b_id, ta.name AS team_a_name, tb.name AS team_b_name
+  SELECT m.id, m.phase_id, m.team_a_id, m.team_b_id,
+         ta.name AS team_a_name, tb.name AS team_b_name,
+         m.proposed_slots, m.proposed_by_team_id, m.proposed_by_player_name,
+         m.confirmed_slot, m.confirmed_by_player_name
   FROM matchups m
   JOIN teams ta ON ta.id = m.team_a_id
   JOIN teams tb ON tb.id = m.team_b_id`;
+
+function formatMatchup(m) {
+  if (!m) return null;
+  let proposed_slots = [];
+  if (m.proposed_slots) {
+    try { proposed_slots = JSON.parse(m.proposed_slots); } catch { proposed_slots = []; }
+  }
+  return {
+    ...m,
+    proposed_slots: Array.isArray(proposed_slots) ? proposed_slots : [],
+  };
+}
+
+async function loadMatchupContext(mid) {
+  const raw = await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid]);
+  if (!raw) throw notFound('Paarung nicht gefunden.');
+  const m = formatMatchup(raw);
+  const phase = getPhase(m.phase_id);
+  const players = await db.all(
+    'SELECT id, name, team_id FROM players WHERE team_id IN (?, ?) ORDER BY id', [m.team_a_id, m.team_b_id]);
+  const ids = players.map((p) => p.id);
+  const avail = ids.length
+    ? await db.all(
+      `SELECT player_id, date, hour, status FROM availabilities WHERE phase_id = ? AND player_id IN (${ids.map(() => '?').join(', ')})`,
+      [m.phase_id, ...ids])
+    : [];
+  const availability = {};
+  for (const p of players) availability[p.id] = {};
+  for (const a of avail) availability[a.player_id][`${a.date}|${a.hour}`] = a.status;
+
+  const teamAPlayers = players.filter((p) => p.team_id === m.team_a_id);
+  const teamBPlayers = players.filter((p) => p.team_id === m.team_b_id);
+  const allSaved = teamAPlayers.length > 0 && teamBPlayers.length > 0 && players.every((p) => Object.keys(availability[p.id]).length > 0);
+  const validDates = new Set(phase ? phaseDates(phase) : []);
+
+  const checkSlot = (slotKey) => {
+    if (typeof slotKey !== 'string' || !slotKey.includes('|')) return 'invalid';
+    const [d, hStr] = slotKey.split('|');
+    const h = Number(hStr);
+    if (!validDates.has(d) || !HOURS.includes(h)) return 'invalid';
+    let r = 0, y = 0;
+    for (const p of players) {
+      const s = availability[p.id]?.[slotKey] || 'red';
+      if (s === 'red') r++;
+      else if (s === 'yellow') y++;
+    }
+    return r > 0 ? 'no' : y > 0 ? 'maybe' : 'perfect';
+  };
+
+  const rawOthers = await db.all(
+    `${MATCHUP_SELECT} WHERE m.id <> ? AND m.confirmed_slot IS NOT NULL ORDER BY m.confirmed_slot, m.id`,
+    [mid]
+  );
+  const otherConfirmed = rawOthers
+    .map(formatMatchup)
+    .filter((x) => {
+      const [d] = String(x.confirmed_slot || '').split('|');
+      return validDates.has(d);
+    })
+    .map((x) => ({
+      id: x.id,
+      phase_id: x.phase_id,
+      team_a_name: x.team_a_name,
+      team_b_name: x.team_b_name,
+      confirmed_slot: x.confirmed_slot,
+    }));
+
+  return {
+    matchup: m,
+    phase,
+    players,
+    teamA: { id: m.team_a_id, name: m.team_a_name, players: teamAPlayers },
+    teamB: { id: m.team_b_id, name: m.team_b_name, players: teamBPlayers },
+    availability,
+    allSaved,
+    checkSlot,
+    otherConfirmed,
+  };
+}
 
 async function loadTeams() {
   const teams = await db.all('SELECT id, name FROM teams ORDER BY LOWER(name), id');
@@ -120,7 +202,7 @@ app.get('/api/matchups', wrap(async (req, res) => {
   const rows = phase
     ? await db.all(`${MATCHUP_SELECT} WHERE m.phase_id = ? ORDER BY m.id`, [phase])
     : await db.all(`${MATCHUP_SELECT} ORDER BY m.id`);
-  res.json(rows);
+  res.json(rows.map(formatMatchup));
 }));
 
 app.get('/api/players/:id', wrap(async (req, res) => {
@@ -132,11 +214,11 @@ app.get('/api/players/:id', wrap(async (req, res) => {
   const teammates = player.team_id
     ? await db.all('SELECT id, name FROM players WHERE team_id = ? AND id <> ? ORDER BY id', [player.team_id, pid])
     : [];
-  const matchups = player.team_id
+  const rawMatchups = player.team_id
     ? await db.all(`${MATCHUP_SELECT} WHERE m.team_a_id = ? OR m.team_b_id = ? ORDER BY m.id`, [player.team_id, player.team_id])
     : [];
   const saved = await db.all('SELECT DISTINCT phase_id FROM availabilities WHERE player_id = ?', [pid]);
-  res.json({ player, teammates, matchups, savedPhases: saved.map((r) => r.phase_id) });
+  res.json({ player, teammates, matchups: rawMatchups.map(formatMatchup), savedPhases: saved.map((r) => r.phase_id) });
 }));
 
 app.get('/api/players/:id/availability/:phaseId', wrap(async (req, res) => {
@@ -184,25 +266,83 @@ app.put('/api/players/:id/availability/:phaseId', wrap(async (req, res) => {
 
 app.get('/api/matchups/:id/overlap', wrap(async (req, res) => {
   const mid = toId(req.params.id);
-  const m = await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid]);
-  if (!m) throw notFound('Paarung nicht gefunden.');
-  const players = await db.all(
-    'SELECT id, name, team_id FROM players WHERE team_id IN (?, ?) ORDER BY id', [m.team_a_id, m.team_b_id]);
-  const ids = players.map((p) => p.id);
-  const avail = ids.length
-    ? await db.all(
-      `SELECT player_id, date, hour, status FROM availabilities WHERE phase_id = ? AND player_id IN (${ids.map(() => '?').join(', ')})`,
-      [m.phase_id, ...ids])
-    : [];
-  const availability = {};
-  for (const p of players) availability[p.id] = {};
-  for (const a of avail) availability[a.player_id][`${a.date}|${a.hour}`] = a.status;
+  const ctx = await loadMatchupContext(mid);
   res.json({
-    matchup: m,
-    teamA: { id: m.team_a_id, name: m.team_a_name, players: players.filter((p) => p.team_id === m.team_a_id) },
-    teamB: { id: m.team_b_id, name: m.team_b_name, players: players.filter((p) => p.team_id === m.team_b_id) },
-    availability,
+    matchup: ctx.matchup,
+    teamA: ctx.teamA,
+    teamB: ctx.teamB,
+    availability: ctx.availability,
+    otherConfirmed: ctx.otherConfirmed,
   });
+}));
+
+// ---------- Termin-Einigung (1–3 Vorschläge + Team-Handshake) ----------
+app.post('/api/matchups/:id/propose', wrap(async (req, res) => {
+  const mid = toId(req.params.id);
+  const pid = toId(req.body?.player_id);
+  const rawSlots = Array.isArray(req.body?.slots) ? req.body.slots : [];
+  const slots = [...new Set(rawSlots.map(String))];
+
+  const ctx = await loadMatchupContext(mid);
+  const { matchup: m } = ctx;
+
+  if (m.confirmed_slot) {
+    throw bad('Der Spieltermin steht bereits verbindlich fest und kann nur noch vom Admin geändert werden.');
+  }
+  const player = ctx.players.find((p) => p.id === pid);
+  if (!player) {
+    throw new HttpError(403, 'Du gehörst keinem der beiden Teams dieser Paarung an.');
+  }
+  if (!ctx.allSaved) {
+    throw bad('Erst müssen alle Spieler beider Teams ihre Zeiten für diese Phase gespeichert haben.');
+  }
+  if (slots.length < 1 || slots.length > 3) {
+    throw bad('Bitte wähle zwischen 1 und 3 Terminen für deinen Vorschlag aus.');
+  }
+  for (const s of slots) {
+    const st = ctx.checkSlot(s);
+    if (st !== 'perfect' && st !== 'maybe') {
+      throw bad('Es dürfen nur perfekte (alle Grün) oder mögliche (Grün/Gelb) Termine vorgeschlagen werden.');
+    }
+  }
+
+  await db.run(
+    'UPDATE matchups SET proposed_slots = ?, proposed_by_team_id = ?, proposed_by_player_name = ? WHERE id = ?',
+    [JSON.stringify(slots), player.team_id, player.name, mid]
+  );
+  res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
+}));
+
+app.post('/api/matchups/:id/confirm', wrap(async (req, res) => {
+  const mid = toId(req.params.id);
+  const pid = toId(req.body?.player_id);
+  const slot = String(req.body?.slot || '');
+
+  const ctx = await loadMatchupContext(mid);
+  const { matchup: m } = ctx;
+
+  if (m.confirmed_slot) {
+    throw bad('Der Spieltermin steht bereits verbindlich fest.');
+  }
+  const player = ctx.players.find((p) => p.id === pid);
+  if (!player) {
+    throw new HttpError(403, 'Du gehörst keinem der beiden Teams dieser Paarung an.');
+  }
+  if (!m.proposed_slots.length || !m.proposed_by_team_id) {
+    throw bad('Es liegt aktuell kein Terminvorschlag vor.');
+  }
+  if (player.team_id === m.proposed_by_team_id) {
+    throw bad('Das gegnerische Team muss den Terminvorschlag bestätigen.');
+  }
+  if (!m.proposed_slots.includes(slot)) {
+    throw bad('Dieser Termin gehört nicht zu den vorgeschlagenen Terminen.');
+  }
+
+  await db.run(
+    'UPDATE matchups SET confirmed_slot = ?, confirmed_by_player_name = ? WHERE id = ?',
+    [slot, player.name, mid]
+  );
+  res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
 }));
 
 // ---------- Admin-API ----------
@@ -301,7 +441,7 @@ async function validateMatchup(body, exceptId = 0) {
 app.post('/api/matchups', requireAdmin, wrap(async (req, res) => {
   const { phaseId, a, b } = await validateMatchup(req.body);
   const row = await db.get('INSERT INTO matchups (phase_id, team_a_id, team_b_id) VALUES (?, ?, ?) RETURNING id', [phaseId, a, b]);
-  res.status(201).json(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [row.id]));
+  res.status(201).json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [row.id])));
 }));
 
 app.put('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
@@ -309,8 +449,43 @@ app.put('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
   const existing = await db.get('SELECT id, phase_id FROM matchups WHERE id = ?', [mid]);
   if (!existing) throw notFound('Paarung nicht gefunden.');
   const { phaseId, a, b } = await validateMatchup({ phase_id: existing.phase_id, ...req.body }, mid);
-  await db.run('UPDATE matchups SET phase_id = ?, team_a_id = ?, team_b_id = ? WHERE id = ?', [phaseId, a, b, mid]);
-  res.json(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid]));
+  await db.run(
+    `UPDATE matchups
+     SET phase_id = ?, team_a_id = ?, team_b_id = ?,
+         proposed_slots = NULL, proposed_by_team_id = NULL, proposed_by_player_name = NULL,
+         confirmed_slot = NULL, confirmed_by_player_name = NULL
+     WHERE id = ?`,
+    [phaseId, a, b, mid]
+  );
+  res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
+}));
+
+app.put('/api/matchups/:id/schedule', requireAdmin, wrap(async (req, res) => {
+  const mid = toId(req.params.id);
+  const ctx = await loadMatchupContext(mid);
+  const action = req.body?.action;
+  if (action === 'reset') {
+    await db.run(
+      `UPDATE matchups
+       SET proposed_slots = NULL, proposed_by_team_id = NULL, proposed_by_player_name = NULL,
+           confirmed_slot = NULL, confirmed_by_player_name = NULL
+       WHERE id = ?`,
+      [mid]
+    );
+  } else if (action === 'set') {
+    const slot = String(req.body?.slot || '');
+    const st = ctx.checkSlot(slot);
+    if (st === 'invalid') throw bad('Ungültiges Datum oder Uhrzeit für diese Phase.');
+    await db.run(
+      `UPDATE matchups
+       SET confirmed_slot = ?, confirmed_by_player_name = 'Admin'
+       WHERE id = ?`,
+      [slot, mid]
+    );
+  } else {
+    throw bad('Unbekannte Aktion.');
+  }
+  res.json(formatMatchup(await db.get(`${MATCHUP_SELECT} WHERE m.id = ?`, [mid])));
 }));
 
 app.delete('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
@@ -320,7 +495,7 @@ app.delete('/api/matchups/:id', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/admin/seed-demo', requireAdmin, wrap(async (req, res) => {
-  const result = await seedDemoData(db);
+  const result = await seedDemoData(db, { force: req.body?.force !== false });
   res.json(result);
 }));
 
@@ -340,9 +515,7 @@ initDb()
   .then(async (database) => {
     db = database;
     try {
-      const existing = await db.all('SELECT id FROM teams LIMIT 1');
-      if (!existing.length && process.env.AUTO_SEED !== 'false') {
-        console.log('Datenbank ist leer – initialisiere Demo-Daten (8 Teams, 24 Spieler, Paarungen)...');
+      if (process.env.AUTO_SEED !== 'false') {
         await seedDemoData(db);
       }
     } catch (err) {

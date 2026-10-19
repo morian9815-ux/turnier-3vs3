@@ -34,12 +34,25 @@ CREATE TABLE IF NOT EXISTS matchups (
   id SERIAL PRIMARY KEY,
   phase_id TEXT NOT NULL,
   team_a_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  team_b_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE
+  team_b_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  proposed_slots TEXT,
+  proposed_by_team_id INTEGER,
+  proposed_by_player_name TEXT,
+  confirmed_slot TEXT,
+  confirmed_by_player_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_matchups_phase ON matchups(phase_id);
 `;
 
 const SCHEMA_SQLITE = SCHEMA_PG.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT');
+
+const MIGRATIONS = [
+  'ALTER TABLE matchups ADD COLUMN proposed_slots TEXT',
+  'ALTER TABLE matchups ADD COLUMN proposed_by_team_id INTEGER',
+  'ALTER TABLE matchups ADD COLUMN proposed_by_player_name TEXT',
+  'ALTER TABLE matchups ADD COLUMN confirmed_slot TEXT',
+  'ALTER TABLE matchups ADD COLUMN confirmed_by_player_name TEXT',
+];
 
 function toPg(sql) {
   let i = 0;
@@ -66,6 +79,9 @@ async function createPostgres(rawUrl) {
   });
 
   await pool.query(SCHEMA_PG);
+  for (const sql of MIGRATIONS) {
+    try { await pool.query(sql); } catch { /* Spalte existiert bereits */ }
+  }
 
   const db = make(pool);
   db.kind = 'postgres';
@@ -93,6 +109,9 @@ function createSqlite() {
   const sdb = new DatabaseSync(file);
   sdb.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   sdb.exec(SCHEMA_SQLITE);
+  for (const sql of MIGRATIONS) {
+    try { sdb.exec(sql); } catch { /* Spalte existiert bereits */ }
+  }
 
   const norm = (row) => (row ? { ...row } : row);
   const runner = {

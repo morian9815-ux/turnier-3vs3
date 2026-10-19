@@ -153,6 +153,7 @@
         <span><i class="lg m-perfect"></i>Perfekt – alle grün</span>
         <span><i class="lg m-maybe"></i>Möglich – keiner rot, mind. 1 gelb</span>
         <span><i class="lg m-no"></i>Nicht möglich – mind. 1 rot / nicht eingetragen</span>
+        <span><i class="lg m-tv"></i>📺 Anderes Spiel (inkl. ~1,5h Spielzeit)</span>
       </div>`;
     }
     return `<div class="legend">
@@ -377,8 +378,64 @@
             const ph = getPhase(m.phase_id);
             const opponent = opponentOf(m, me.player.team_id);
             const mySaved = saved.has(m.phase_id);
+            const propSlots = Array.isArray(m.proposed_slots) ? m.proposed_slots : [];
+            const isIncomingProp = !m.confirmed_slot && propSlots.length > 0 && m.proposed_by_team_id !== me.player.team_id;
+            const isOutgoingProp = !m.confirmed_slot && propSlots.length > 0 && m.proposed_by_team_id === me.player.team_id;
+            const isWaitingPlayers = !m.confirmed_slot && !propSlots.length && (m.phase_id === 'w3-r16' || !mySaved);
+
+            let schedBanner = '';
+            if (m.confirmed_slot) {
+              schedBanner = `
+                <div class="pmh-sched confirmed">
+                  <span class="pmh-sched-icon">🏆</span>
+                  <div class="pmh-sched-info">
+                    <small>Fester Spieltermin (verbindlich festgelegt · Bestätigt von ${esc(m.confirmed_by_player_name || '')})</small>
+                    <b>${slotLabel(m.confirmed_slot)} Uhr</b>
+                  </div>
+                  <span class="badge ok">🔒 Steht fest</span>
+                </div>`;
+            } else if (isIncomingProp) {
+              schedBanner = `
+                <div class="pmh-sched incoming">
+                  <span class="pmh-sched-icon">📩</span>
+                  <div class="pmh-sched-info">
+                    <small>Terminvorschlag von <b>${esc(opponent)}</b> (${esc(m.proposed_by_player_name || '')}) – bitte im Match-Abgleich bestätigen oder Gegenvorschlag machen:</small>
+                    <div class="pmh-prop-list">${propSlots.map((s) => `<span class="prop-chip">${slotLabel(s)} Uhr</span>`).join('')}</div>
+                  </div>
+                </div>`;
+            } else if (isOutgoingProp) {
+              schedBanner = `
+                <div class="pmh-sched outgoing">
+                  <span class="pmh-sched-icon">⏳</span>
+                  <div class="pmh-sched-info">
+                    <small>Euer Vorschlag (${esc(m.proposed_by_player_name || '')}) – wartet auf Bestätigung von <b>${esc(opponent)}</b>:</small>
+                    <div class="pmh-prop-list">${propSlots.map((s) => `<span class="prop-chip">${slotLabel(s)} Uhr</span>`).join('')}</div>
+                  </div>
+                </div>`;
+            } else if (isWaitingPlayers) {
+              schedBanner = `
+                <div class="pmh-sched pending">
+                  <span class="pmh-sched-icon">⚠️</span>
+                  <div class="pmh-sched-info">
+                    <small>Noch nicht alle 6 Spieler haben ihre Zeiten für diese Phase gespeichert</small>
+                    <span class="pmh-sched-sub">Die Termin-Einigung schaltet sich frei, sobald alle Spieler beider Teams eingetragen haben.</span>
+                  </div>
+                  <span class="badge warn">Zeiten fehlen noch</span>
+                </div>`;
+            } else {
+              schedBanner = `
+                <div class="pmh-sched ready">
+                  <span class="pmh-sched-icon">🤝</span>
+                  <div class="pmh-sched-info">
+                    <small>Alle 6 Spieler haben abgestimmt · Termin-Einigung bereit (inkl. 📺 Stream-Radar)</small>
+                    <span class="pmh-sched-sub">Jetzt im Match-Abgleich 1 bis 3 passende Termine auswählen & an <b>${esc(opponent)}</b> vorschlagen!</span>
+                  </div>
+                  <span class="badge ok">Bereit zur Einigung</span>
+                </div>`;
+            }
+
             return `
-              <div class="pmh-card c-${ph ? ph.color : 'green'}">
+              <div class="pmh-card c-${ph ? ph.color : 'green'} ${m.confirmed_slot ? 'has-confirmed' : isIncomingProp ? 'has-incoming' : ''}">
                 <div class="pmh-meta">
                   <span class="pmh-phase"><i class="dot"></i>${ph ? esc(ph.name) : ''}${ph && ph.subtitle ? ` (${esc(ph.subtitle)})` : ''} · Woche ${ph ? ph.week : ''}</span>
                   <span class="pmh-dates">${ph ? formatRange(ph) : ''}</span>
@@ -394,10 +451,11 @@
                     <b>${esc(opponent)}</b>
                   </div>
                 </div>
+                ${schedBanner}
                 <div class="pmh-actions">
                   <a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-primary btn-lg pmh-btn-match">
-                    <span class="btn-main-txt">⚔ 6-Spieler-Match-Abgleich ›</span>
-                    <span class="btn-sub-txt">Gemeinsame Termine ansehen</span>
+                    <span class="btn-main-txt">${isIncomingProp ? '📩 Terminvorschlag prüfen & bestätigen ›' : isOutgoingProp ? '⏳ Euren Vorschlag & Match-Abgleich ansehen ›' : m.confirmed_slot ? '🏆 Match-Abgleich & festen Termin ansehen ›' : isWaitingPlayers ? '⚠️ Match-Abgleich ansehen (wer fehlt noch?) ›' : '🤝 Jetzt 1–3 Termine im Match-Abgleich vorschlagen ›'}</span>
+                    <span class="btn-sub-txt">${isIncomingProp ? `${propSlots.length} ${propSlots.length === 1 ? 'Termin' : 'Termine'} von ${esc(opponent)} vorgeschlagen` : isOutgoingProp ? `Wartet auf Antwort von ${esc(opponent)}` : m.confirmed_slot ? `Festgelegt: ${slotLabel(m.confirmed_slot)} Uhr` : isWaitingPlayers ? 'Zeigt, welche Spieler noch eintragen müssen' : 'Alle 6 Spieler fertig · Gemeinsame Termine & Stream-Radar'}</span>
                   </a>
                   <a href="#/player/phase/${m.phase_id}" class="btn btn-ghost pmh-btn-edit">
                     🗓 ${mySaved ? '✓ Meine Zeiten bearbeiten' : '⚠️ Erst eigene Zeiten eintragen'}
@@ -448,13 +506,17 @@
                       <span class="pb-dates">${formatRange(p)}</span>
                       <div class="pb-meta">
                         ${saved.has(p.id) ? '<span class="badge ok">✓ Zeiten gespeichert</span>' : '<span class="badge open">Noch nicht eingetragen</span>'}
-                        ${ms.map((m) => `<span class="badge vs">⚔ vs. ${esc(opponentOf(m, me.player.team_id))}</span>`).join('')}
+                        ${ms.map((m) => `<span class="badge vs">⚔ vs. ${esc(opponentOf(m, me.player.team_id))}</span>${m.confirmed_slot ? `<span class="badge ok">🏆 ${slotLabel(m.confirmed_slot)}</span>` : ''}`).join('')}
                       </div>
                       ${ms.length ? `
                         <div class="pb-quick-match">
-                          <a href="#/player/phase/${p.id}/match/${ms[0].id}" class="btn-match-direct" onclick="event.stopPropagation()">
-                            ⚔ Direkt zum Match-Abgleich vs. ${esc(opponentOf(ms[0], me.player.team_id))} ›
-                          </a>
+                          ${ms.map((m) => {
+                            const ps = Array.isArray(m.proposed_slots) ? m.proposed_slots : [];
+                            const ico = m.confirmed_slot ? '🏆' : ps.length ? (m.proposed_by_team_id !== me.player.team_id ? '📩' : '⏳') : '⚔';
+                            return `<a href="#/player/phase/${p.id}/match/${m.id}" class="btn-match-direct" onclick="event.stopPropagation()">
+                              ${ico} Match-Abgleich vs. ${esc(opponentOf(m, me.player.team_id))} ›
+                            </a>`;
+                          }).join('')}
                         </div>` : ''}
                     </div>`;
                 }).join('')}
@@ -472,6 +534,7 @@
     const me = await loadMe();
     if (!me) return;
     const myMatchups = me.matchups.filter((m) => m.phase_id === phase.id);
+    const activeMatchup = myMatchups.find((x) => String(x.id) === String(matchupId)) || myMatchups[0] || null;
     const mode = matchupId ? 'match' : 'mine';
     const groupSiblings = PHASES.filter((p) => p.name === phase.name && PHASES.filter((x) => x.name === p.name).length > 1);
 
@@ -495,21 +558,23 @@
             <a class="tab ${mode === 'mine' ? 'active' : ''}" href="#/player/phase/${phase.id}">
               🗓 1. Meine Zeiten eintragen
             </a>
-            ${myMatchups.length
-              ? `<a class="tab match-tab-highlight ${mode === 'match' ? 'active' : ''}" href="#/player/phase/${phase.id}/match/${myMatchups[0].id}">
-                  ⚔ 2. Match-Abgleich: 6 Spieler (${esc(me.player.team_name)} vs. ${esc(opponentOf(myMatchups[0], me.player.team_id))})
+            ${activeMatchup
+              ? `<a class="tab match-tab-highlight ${mode === 'match' ? 'active' : ''}" href="#/player/phase/${phase.id}/match/${activeMatchup.id}">
+                  ⚔ 2. Match-Abgleich: 6 Spieler (${esc(me.player.team_name)} vs. ${esc(opponentOf(activeMatchup, me.player.team_id))}${myMatchups.length > 1 ? ` · +${myMatchups.length - 1} weiteres Spiel` : ''})
                   <span class="pulse-pill">🔥 Wichtig</span>
                 </a>`
               : `<span class="tab disabled" title="Für diese Phase wurde noch keine Paarung für dein Team festgelegt.">⚔ 2. Match-Abgleich (Noch kein Gegner eingeteilt)</span>`}
           </nav>
-          ${mode === 'mine' && myMatchups.length ? `
+          ${mode === 'mine' && activeMatchup ? `
             <div class="match-callout metal">
               <span class="mc-icon">⚔</span>
               <div class="mc-content">
-                <b>Angesetztes Match: ${esc(me.player.team_name)} vs. ${esc(opponentOf(myMatchups[0], me.player.team_id))}</b>
-                <p>Trage unten deine Zeiten ein und speichere sie. Sobald du fertig bist, kannst du oben auf <b>„⚔ 2. Match-Abgleich“</b> klicken, um zu sehen, an welchen Stunden alle 6 Spieler gleichzeitig grün haben!</p>
+                <b>${myMatchups.length > 1 ? `Angesetzte Matches (${myMatchups.length}) in dieser Phase:` : `Angesetztes Match: ${esc(me.player.team_name)} vs. ${esc(opponentOf(activeMatchup, me.player.team_id))}`}</b>
+                <p>Trage unten deine Zeiten ein und speichere sie. Über die Buttons rechts (oder den Tab oben) gelangst du direkt zum 6-Spieler-Match-Abgleich:</p>
               </div>
-              <a href="#/player/phase/${phase.id}/match/${myMatchups[0].id}" class="btn btn-primary btn-sm mc-cta">Zum Match-Abgleich ›</a>
+              <div class="mc-cta-list">
+                ${myMatchups.map((m) => `<a href="#/player/phase/${phase.id}/match/${m.id}" class="btn btn-primary btn-sm mc-cta">vs. ${esc(opponentOf(m, me.player.team_id))} ›</a>`).join('')}
+              </div>
             </div>` : ''}
           ${!myMatchups.length ? '<p class="hint small">Der Match-Abgleich wird hier freigeschaltet, sobald der Admin eine Paarung mit deinem Team für diese Phase festlegt.</p>' : ''}
           <div id="pv-body"><div class="loading"><div class="spinner"></div></div></div>
@@ -524,7 +589,14 @@
       const m = myMatchups.find((x) => String(x.id) === String(matchupId));
       if (!m) return go(`#/player/phase/${phase.id}`);
       const chooser = myMatchups.length > 1
-        ? `<div class="mu-chooser">${myMatchups.map((x) => `<a href="#/player/phase/${phase.id}/match/${x.id}" class="chip ${x.id === m.id ? 'active' : ''}">${esc(x.team_a_name)} vs. ${esc(x.team_b_name)}</a>`).join('')}</div>`
+        ? `<div class="mu-chooser">
+            <span class="muc-label">Deine Spiele in dieser Phase:</span>
+            ${myMatchups.map((x) => {
+              const ps = Array.isArray(x.proposed_slots) ? x.proposed_slots : [];
+              const tag = x.confirmed_slot ? '🏆 Fest' : ps.length ? (x.proposed_by_team_id !== me.player.team_id ? '📩 Anfrage vom Gegner' : '⏳ Euer Vorschlag') : '🤝 Bereit';
+              return `<a href="#/player/phase/${phase.id}/match/${x.id}" class="chip ${x.id === m.id ? 'active' : ''}">vs. ${esc(opponentOf(x, me.player.team_id))} <small>(${tag})</small></a>`;
+            }).join('')}
+          </div>`
         : '';
       await mountMatchView(body, phase, m.id, { prefix: chooser, highlightPlayer: me.player.id });
     }
@@ -686,15 +758,19 @@
     });
   }
 
-  // ---------- Match-Abgleich (6 Spieler) ----------
-  async function mountMatchView(body, phase, matchupId, { prefix = '', highlightPlayer = null } = {}) {
+  // ---------- Match-Abgleich (6 Spieler + Termin-Einigung) ----------
+  async function mountMatchView(body, phase, matchupId, { prefix = '', highlightPlayer = null, isAdmin = false } = {}) {
     let data;
     const tip = el('<div class="tooltip" hidden></div>');
     document.body.appendChild(tip);
     onCleanup(() => tip.remove());
     let pinned = null;
+    const selectedPropose = new Set();
+    let proposeMode = false;
 
     const render = () => {
+      const m = data.matchup;
+      const propSlots = Array.isArray(m.proposed_slots) ? m.proposed_slots : [];
       const allPlayers = [...data.teamA.players, ...data.teamB.players];
       const n = allPlayers.length;
       const statusOf = (pid, k) => data.availability[pid]?.[k] || 'red';
@@ -713,9 +789,54 @@
         if (i.cls === 'm-perfect') perfect.push(key(d, h));
         else if (i.cls === 'm-maybe') maybe.push({ k: key(d, h), ...i });
       }
-      maybe.sort((a, b) => b.g - a.g);
+      // Chronologische Sortierung beibehalten (Mo -> So, 08:00 -> 23:00)
       const missing = allPlayers.filter((p) => !hasSaved(p.id));
       const short = [data.teamA, data.teamB].filter((t) => t.players.length < 3);
+      const allSaved = data.teamA.players.length > 0 && data.teamB.players.length > 0 && missing.length === 0;
+      const mePlayer = highlightPlayer ? allPlayers.find((p) => p.id === highlightPlayer) : null;
+      const myTeamId = mePlayer ? mePlayer.team_id : null;
+      const propTeamName = m.proposed_by_team_id === data.teamA.id ? data.teamA.name : m.proposed_by_team_id === data.teamB.id ? data.teamB.name : '';
+      const waitTeamName = m.proposed_by_team_id === data.teamA.id ? data.teamB.name : m.proposed_by_team_id === data.teamB.id ? data.teamA.name : '';
+
+      // Parallelspiel- & Stream-Radar (Spieldauer bis ca. 1,5 Stunden -> ±1 Stunde am selben Tag)
+      const pad2 = (x) => String(x).padStart(2, '0');
+      const otherConfirmed = Array.isArray(data.otherConfirmed) ? data.otherConfirmed : [];
+      const conflictsFor = (slotKey) => {
+        if (!slotKey || !slotKey.includes('|')) return [];
+        const [d, hStr] = slotKey.split('|');
+        const h = Number(hStr);
+        const list = [];
+        for (const oc of otherConfirmed) {
+          if (!oc.confirmed_slot || !oc.confirmed_slot.includes('|')) continue;
+          const [od, ohStr] = oc.confirmed_slot.split('|');
+          const oh = Number(ohStr);
+          if (od !== d) continue;
+          const diff = h - oh;
+          if (Math.abs(diff) <= 1) {
+            list.push({
+              ...oc,
+              otherHour: oh,
+              diff,
+              exact: diff === 0,
+            });
+          }
+        }
+        return list;
+      };
+      const conflictChipBadge = (k) => {
+        const cs = conflictsFor(k);
+        if (!cs.length) return '';
+        const hasExact = cs.some((c) => c.exact);
+        const label = hasExact
+          ? `📺⚠️ ${cs.length > 1 ? `${cs.length} Spiele parallel` : 'Parallelspiel'}`
+          : '📺⚠️ Überschneidung (~1,5h)';
+        return `<span class="sp-conflict ${hasExact ? 'exact' : 'overlap'}">${label}</span>`;
+      };
+      const conflictTitle = (k) => {
+        const cs = conflictsFor(k);
+        if (!cs.length) return '';
+        return 'Achtung Stream/Zuschauer (~1,5h Spielzeit): ' + cs.map((c) => `${c.team_a_name} vs. ${c.team_b_name} (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join(', ');
+      };
 
       const teamBox = (t, side) => `
         <div class="team-box ${side}">
@@ -723,6 +844,219 @@
           <ul>${t.players.map((p) => `<li class="${p.id === highlightPlayer ? 'me' : ''}">${esc(p.name)}${p.id === highlightPlayer ? ' <em>(du)</em>' : ''}
             ${hasSaved(p.id) ? '<span class="badge ok sm">✓ eingetragen</span>' : '<span class="badge open sm">fehlt</span>'}</li>`).join('') || '<li class="muted">Keine Spieler</li>'}</ul>
         </div>`;
+
+      const adminBarHTML = isAdmin ? `
+        <div class="sched-admin-bar">
+          <span>🔧 <b>Admin-Steuerung:</b></span>
+          ${m.confirmed_slot || propSlots.length ? `<button type="button" class="btn btn-sm btn-ghost" id="admin-reset-sched">🔓 ${m.confirmed_slot ? 'Festen Termin wieder freigeben' : 'Vorschlag zurücksetzen'}</button>` : ''}
+          <button type="button" class="btn btn-sm btn-primary" id="admin-set-sched">🏆 ${m.confirmed_slot ? 'Termin manuell ändern' : 'Termin manuell festlegen'}</button>
+        </div>` : '';
+
+      let schedBoxHTML = '';
+      if (m.confirmed_slot) {
+        schedBoxHTML = `
+          <section class="sched-card confirmed metal">
+            <div class="sched-top">
+              <span class="sched-icon">🏆</span>
+              <div class="sched-main">
+                <span class="sched-kicker">Offizieller & verbindlicher Spieltermin</span>
+                <h3 class="sched-time">${slotLabel(m.confirmed_slot)} Uhr</h3>
+                <p class="sched-sub">
+                  ${m.confirmed_by_player_name === 'Admin'
+                    ? 'Festgelegt durch die Turnierleitung (Admin).'
+                    : `Verbindlich geeinigt · Bestätigt von <b>${esc(m.confirmed_by_player_name || '')}</b>${m.proposed_by_player_name ? ` (Vorschlag von ${esc(m.proposed_by_player_name)}, ${esc(propTeamName)})` : ''}.`}
+                </p>
+              </div>
+              <span class="badge ok">🔒 Fest hinterlegt</span>
+            </div>
+            ${isAdmin ? adminBarHTML : '<div class="sched-lock-note">🔒 Dieser Termin ist fest eingetragen und gesperrt. Nachträgliche Änderungen sind nur über den Turnier-Admin möglich.</div>'}
+          </section>`;
+      } else if (!allSaved) {
+        schedBoxHTML = `
+          <section class="sched-card locked metal">
+            <div class="sched-top">
+              <span class="sched-icon">⏳</span>
+              <div class="sched-main">
+                <span class="sched-kicker">Termin-Einigung (${n - missing.length}/${n} Spieler haben abgestimmt)</span>
+                <h3 class="sched-title">Wartet noch auf alle Spieler-Zeiten</h3>
+                <p class="sched-sub">Sobald alle Spieler beider Teams ihre Zeiten für diese Phase gespeichert haben, wird hier die Termin-Einigung freigeschaltet (1 bis 3 Termine vorschlagen & vom Gegner bestätigen lassen).</p>
+                ${missing.length ? `<div class="sched-missing">Noch offen: ${missing.map((p) => `<span class="badge warn">${esc(p.name)}</span>`).join(' ')}</div>` : ''}
+              </div>
+            </div>
+            ${adminBarHTML}
+          </section>`;
+      } else if (propSlots.length > 0 && !proposeMode) {
+        if (myTeamId && myTeamId !== m.proposed_by_team_id) {
+          schedBoxHTML = `
+            <section class="sched-card incoming metal">
+              <div class="sched-top">
+                <span class="sched-icon">📩</span>
+                <div class="sched-main">
+                  <span class="sched-kicker">Terminvorschlag von ${esc(propTeamName)} (${esc(m.proposed_by_player_name || '')})</span>
+                  <h3 class="sched-title">${propSlots.length === 1 ? '1 Termin vorgeschlagen – jetzt bestätigen oder Gegenvorschlag machen:' : `${propSlots.length} Termine zur Auswahl – wähle einen aus & bestätige:`}</h3>
+                  <p class="sched-sub">Klicke bei eurem Wunschtermin auf <b>„✓ Verbindlich bestätigen“</b>, um ihn als festen Spieltermin einzuloggen – oder mache bis zu 3 Gegenvorschläge.</p>
+                </div>
+              </div>
+              <div class="prop-choice-grid">
+                ${propSlots.map((k) => {
+                  const i = info(k);
+                  const cs = conflictsFor(k);
+                  const badge = i.cls === 'm-perfect'
+                    ? `<span class="badge ok">🏆 Perfekt (${i.g}/${n} Grün)</span>`
+                    : `<span class="badge warn">⚡ Möglich (${i.g} Grün · ${i.y} Gelb)</span>`;
+                  const tvInfo = cs.length
+                    ? `<div class="pcc-conflict-warn">📺⚠️ <b>Achtung (Stream/Zuschauer):</b><br>${cs.map((c) => `${c.exact ? 'Zeitgleich' : 'Überschneidung (~1,5h)'} mit <b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)`).join('<br>')}</div>`
+                    : otherConfirmed.length ? `<span class="badge tv-free">📺 Frei (kein Parallelspiel)</span>` : '';
+                  return `
+                    <div class="prop-choice-card ${i.cls} ${cs.length ? 'has-conflict' : ''}">
+                      <div class="pcc-info">
+                        <b>${slotLabel(k)} Uhr</b>
+                        <div class="pcc-badges">${badge}${!cs.length ? tvInfo : ''}</div>
+                        ${cs.length ? tvInfo : ''}
+                      </div>
+                      <button type="button" class="btn btn-primary pcc-confirm-btn" data-confirm-slot="${k}">
+                        ✓ Verbindlich bestätigen
+                      </button>
+                    </div>`;
+                }).join('')}
+              </div>
+              <div class="sched-footer-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="start-counter-btn">↺ Keiner passt? Gegenvorschlag (1–3 Termine) machen</button>
+              </div>
+              ${adminBarHTML}
+            </section>`;
+        } else {
+          schedBoxHTML = `
+            <section class="sched-card outgoing metal">
+              <div class="sched-top">
+                <span class="sched-icon">⏳</span>
+                <div class="sched-main">
+                  <span class="sched-kicker">Wartet auf Antwort von ${esc(waitTeamName)}</span>
+                  <h3 class="sched-title">Terminvorschlag von ${esc(propTeamName)} (${esc(m.proposed_by_player_name || '')}) ist aktiv</h3>
+                  <p class="sched-sub">Folgende ${propSlots.length === 1 ? 'Termin wurde' : `${propSlots.length} Termine wurden`} vorgeschlagen. Sobald ein Spieler von <b>${esc(waitTeamName)}</b> einen davon bestätigt, steht das Match fest:</p>
+                  <div class="pmh-prop-list">${propSlots.map((k) => {
+                    const i = info(k);
+                    return `<span class="prop-chip lg">${slotLabel(k)} Uhr <small>(${i.cls === 'm-perfect' ? `${i.g}/${n} Grün` : `${i.g}✓ ${i.y}?`})</small>${conflictChipBadge(k)}</span>`;
+                  }).join('')}</div>
+                </div>
+              </div>
+              ${myTeamId === m.proposed_by_team_id ? `
+                <div class="sched-footer-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="edit-propose-btn">✎ Vorschlag ändern (andere 1–3 Termine wählen)</button>
+                </div>` : ''}
+              ${adminBarHTML}
+            </section>`;
+        }
+      } else {
+        const hasSelectable = perfect.length > 0 || maybe.length > 0;
+        const isCounter = propSlots.length > 0 && myTeamId !== m.proposed_by_team_id;
+        const isEdit = propSlots.length > 0 && myTeamId === m.proposed_by_team_id;
+        const selectedWithConflicts = [...selectedPropose]
+          .map((k) => ({ k, cs: conflictsFor(k) }))
+          .filter((x) => x.cs.length > 0);
+
+        schedBoxHTML = `
+          <section class="sched-card propose metal">
+            <div class="sched-top">
+              <span class="sched-icon">🤝</span>
+              <div class="sched-main">
+                <span class="sched-kicker">Alle ${n} Spieler haben abgestimmt · Termin-Einigung bereit</span>
+                <h3 class="sched-title">${isCounter ? `Gegenvorschlag (1–3 Termine) an ${esc(propTeamName)} senden` : isEdit ? 'Terminvorschlag anpassen (1–3 Termine)' : 'Spieltermin vereinbaren: 1 bis 3 Termine vorschlagen'}</h3>
+                <p class="sched-sub">
+                  ${mePlayer
+                    ? 'Klicke unten <b>1 bis maximal 3 passende Termine</b> an (oder wähle sie direkt im Kalender aus) und sende sie als Vorschlag an das gegnerische Team.'
+                    : 'Die Spieler beider Teams können hier 1 bis 3 Termine auswählen und sich per Team-Handshake verbindlich einigen.'}
+                </p>
+              </div>
+            </div>
+            ${!hasSelectable
+              ? '<div class="notice warn">Aktuell gibt es keine Stunde ohne Rot. Bitte passt eure Zeiten im Kalender noch einmal an, damit mindestens ein gemeinsamer Termin (Grün oder Gelb) entsteht.</div>'
+              : `
+                ${perfect.length ? `
+                  <div class="pick-group">
+                    <h4>🏆 Perfekte Termine (alle ${n} Grün) – chronologisch sortiert, zum Auswählen anklicken:</h4>
+                    <div class="pick-chips">
+                      ${perfect.map((k) => {
+                        const sel = selectedPropose.has(k);
+                        const cs = conflictsFor(k);
+                        const confCls = cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
+                        return `<button type="button" class="slot-pick perfect ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${k}" title="${esc(conflictTitle(k))}" ${!mePlayer ? 'disabled' : ''}>
+                          <span class="sp-check">${sel ? '✓' : '+'}</span>
+                          <span>${slotLabel(k)}</span>
+                          ${conflictChipBadge(k)}
+                        </button>`;
+                      }).join('')}
+                    </div>
+                  </div>` : ''}
+                ${maybe.length ? `
+                  <div class="pick-group">
+                    <h4>⚡ Mögliche Optionen (kein Rot, mind. 1 Gelb) – chronologisch sortiert, zum Auswählen anklicken:</h4>
+                    <div class="pick-chips">
+                      ${maybe.slice(0, 24).map((x) => {
+                        const sel = selectedPropose.has(x.k);
+                        const cs = conflictsFor(x.k);
+                        const confCls = cs.length ? (cs.some((c) => c.exact) ? 'has-conflict exact' : 'has-conflict overlap') : '';
+                        return `<button type="button" class="slot-pick maybe ${sel ? 'selected' : ''} ${confCls}" data-pick-slot="${x.k}" title="${esc(conflictTitle(x.k))}" ${!mePlayer ? 'disabled' : ''}>
+                          <span class="sp-check">${sel ? '✓' : '+'}</span>
+                          <span>${slotLabel(x.k)} <small>(${x.g}✓ ${x.y}?)</small></span>
+                          ${conflictChipBadge(x.k)}
+                        </button>`;
+                      }).join('')}
+                    </div>
+                  </div>` : ''}
+                ${selectedWithConflicts.length ? `
+                  <div class="propose-conflict-alert">
+                    <span class="pca-icon">📺⚠️</span>
+                    <div class="pca-body">
+                      <b>Achtung – Parallelspiel / Überschneidung (Spieldauer ca. 1,5 Std.):</b>
+                      <ul>
+                        ${selectedWithConflicts.map(({ k, cs }) => `
+                          <li><b>${slotLabel(k)} Uhr:</b> ${cs.map((c) => `${c.exact ? 'Startet zeitgleich mit' : 'Überschneidet sich (~1,5h) mit'} <b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (Start ${pad2(c.otherHour)}:00 Uhr, läuft bis ~${pad2(c.otherHour + 1)}:30 Uhr)`).join(' · ')}</li>
+                        `).join('')}
+                      </ul>
+                      <p>💡 <i>Kein Verbot – ihr könnt den Termin trotzdem vorschlagen! Falls für euch aber auch ein freier Termin passt, weicht gerne aus, damit möglichst viele Spiele einzeln gestreamt und von anderen geschaut werden können.</i></p>
+                    </div>
+                  </div>` : ''}
+                ${mePlayer ? `
+                  <div class="propose-bar">
+                    <div class="pb-selected-info">
+                      <b>Ausgewählt (${selectedPropose.size}/3):</b>
+                      ${selectedPropose.size
+                        ? [...selectedPropose].map((k) => `<span class="prop-chip">${slotLabel(k)}${conflictChipBadge(k)} <button type="button" class="rm-pick" data-pick-slot="${k}" title="Entfernen">✕</button></span>`).join('')
+                        : '<span class="muted">Noch kein Termin angeklickt (wähle 1 bis 3 Termine)</span>'}
+                    </div>
+                    <div class="pb-btns">
+                      ${proposeMode ? `<button type="button" class="btn btn-ghost btn-sm" id="cancel-propose-btn">Abbrechen</button>` : ''}
+                      <button type="button" class="btn btn-primary" id="submit-propose-btn" ${selectedPropose.size === 0 ? 'disabled' : ''}>
+                        📩 ${selectedPropose.size ? `${selectedPropose.size} ${selectedPropose.size === 1 ? 'Termin' : 'Termine'} vorschlagen` : 'Termin(e) vorschlagen'}
+                      </button>
+                    </div>
+                  </div>` : ''}
+              `}
+            ${adminBarHTML}
+          </section>`;
+      }
+
+      const otherMatchesHTML = otherConfirmed.length ? `
+        <div class="other-matches-bar metal">
+          <div class="omb-head">
+            <span class="omb-icon">📺</span>
+            <div class="omb-title">
+              <b>Bereits festgelegte Spiele in diesem Zeitraum (${otherConfirmed.length})</b>
+              <small>Ein Spiel dauert bis zu 1,5 Std. – bitte bei der Terminfindung wenn möglich beachten, damit Spiele nicht parallel laufen und gestreamt/geschaut werden können.</small>
+            </div>
+          </div>
+          <div class="omb-list">
+            ${otherConfirmed.map((oc) => {
+              const [, ohStr] = oc.confirmed_slot.split('|');
+              const oh = Number(ohStr);
+              return `<div class="omb-chip">
+                <span class="omb-time">🏆 ${slotLabel(oc.confirmed_slot)} <small>(bis ~${pad2(oh + 1)}:30 Uhr)</small></span>
+                <span class="omb-teams">${esc(oc.team_a_name)} <i>vs.</i> ${esc(oc.team_b_name)}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>` : '';
 
       body.innerHTML = `
         ${prefix}
@@ -735,39 +1069,237 @@
         </div>
         ${missing.length ? `<div class="notice warn">⚠ ${missing.map((p) => esc(p.name)).join(', ')} ${missing.length === 1 ? 'hat' : 'haben'} für diese Phase noch keine Zeiten gespeichert – das zählt als <b>Rot</b>.</div>` : ''}
         ${short.length ? `<div class="notice warn">⚠ ${short.map((t) => esc(t.name)).join(', ')} ${short.length === 1 ? 'hat' : 'haben'} noch keine 3 Spieler.</div>` : ''}
-        ${perfect.length
-          ? `<div class="slot-list"><h4>🏆 Perfekte Termine</h4><div>${perfect.slice(0, 24).map((k) => `<span class="slot perfect">${slotLabel(k)}</span>`).join('')}${perfect.length > 24 ? `<span class="slot more">+${perfect.length - 24} weitere</span>` : ''}</div></div>`
-          : maybe.length ? `<div class="slot-list"><h4>Beste Optionen (kein Rot)</h4><div>${maybe.slice(0, 12).map((m) => `<span class="slot maybe">${slotLabel(m.k)} · ${m.g}✓ ${m.y}?</span>`).join('')}</div></div>` : '<div class="notice">Aktuell gibt es keine Stunde, in der alle Spieler können.</div>'}
+        ${schedBoxHTML}
+        ${otherMatchesHTML}
         <div class="cal-toolbar">
           ${legend('match')}
           <div class="tool-actions"><span class="muted small" id="refresh-info"></span><button class="btn btn-ghost btn-sm" id="refresh-btn">⟳ Aktualisieren</button></div>
         </div>
-        <p class="hint small">Maus über ein Feld bewegen (am Handy antippen), um den Status aller ${n} Spieler zu sehen.</p>
+        <p class="hint small">Maus über ein Feld bewegen (am Handy antippen), um den Status aller ${n} Spieler sowie eventuelle Parallelspiele (📺) zu sehen.</p>
         <div id="match-grid"></div>`;
+
+      const togglePickSlot = (k) => {
+        if (!mePlayer || m.confirmed_slot || !allSaved) return;
+        const i = info(k);
+        if (i.cls !== 'm-perfect' && i.cls !== 'm-maybe') {
+          toast('Nur grüne oder gelbe Termine (ohne Rot) können vorgeschlagen werden.', 'error');
+          return;
+        }
+        if (selectedPropose.has(k)) {
+          selectedPropose.delete(k);
+        } else {
+          if (selectedPropose.size >= 3) {
+            toast('Du kannst maximal 3 Termine gleichzeitig auswählen.', 'error');
+            return;
+          }
+          selectedPropose.add(k);
+        }
+        if (propSlots.length > 0 && !proposeMode) proposeMode = true;
+        render();
+      };
+
+      const confirmChosenSlot = async (k) => {
+        if (!mePlayer) return;
+        const cs = conflictsFor(k);
+        const conflictWarnModal = cs.length ? `
+          <div class="propose-conflict-alert" style="margin-top:10px">
+            <span class="pca-icon">📺⚠️</span>
+            <div class="pca-body">
+              <b>Hinweis (Parallelspiel / ~1,5h Spielzeit):</b>
+              <ul>${cs.map((c) => `<li><b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> (${pad2(c.otherHour)}:00–${pad2(c.otherHour + 1)}:30 Uhr)</li>`).join('')}</ul>
+              <p>Ihr könnt diesen Termin trotzdem verbindlich festlegen, falls kein anderer Termin besser passt.</p>
+            </div>
+          </div>` : '';
+        const ok = await modal({
+          title: '🏆 Spieltermin verbindlich bestätigen',
+          confirmText: '✓ Ja, verbindlich festlegen',
+          body: `
+            <p>Möchtest du für das Match <b>${esc(data.teamA.name)} vs. ${esc(data.teamB.name)}</b> folgenden Termin verbindlich einloggen?</p>
+            <div class="modal-slot-preview">🏆 ${slotLabel(k)} Uhr</div>
+            ${conflictWarnModal}
+            <p class="hint small" style="margin:8px 0 0">🔒 <b>Wichtig:</b> Nach der Bestätigung steht der Termin fest und kann nur noch vom Turnier-Admin geändert werden.</p>`,
+          onConfirm: async () => {
+            await api(`/matchups/${matchupId}/confirm`, {
+              method: 'POST',
+              body: { player_id: mePlayer.id, slot: k },
+            });
+          },
+        });
+        if (ok) {
+          toast('Spieltermin wurde verbindlich festgelegt! 🏆');
+          proposeMode = false;
+          selectedPropose.clear();
+          await load();
+        }
+      };
+
+      body.querySelectorAll('[data-pick-slot]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          togglePickSlot(btn.dataset.pickSlot);
+        });
+      });
+
+      body.querySelectorAll('[data-confirm-slot]').forEach((btn) => {
+        btn.addEventListener('click', () => confirmChosenSlot(btn.dataset.confirmSlot));
+      });
+
+      body.querySelector('#start-counter-btn')?.addEventListener('click', () => {
+        selectedPropose.clear();
+        proposeMode = true;
+        render();
+      });
+
+      body.querySelector('#edit-propose-btn')?.addEventListener('click', () => {
+        selectedPropose.clear();
+        propSlots.forEach((s) => selectedPropose.add(s));
+        proposeMode = true;
+        render();
+      });
+
+      body.querySelector('#cancel-propose-btn')?.addEventListener('click', () => {
+        selectedPropose.clear();
+        proposeMode = false;
+        render();
+      });
+
+      body.querySelector('#submit-propose-btn')?.addEventListener('click', async (e) => {
+        if (!mePlayer || selectedPropose.size === 0) return;
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        try {
+          await api(`/matchups/${matchupId}/propose`, {
+            method: 'POST',
+            body: { player_id: mePlayer.id, slots: [...selectedPropose] },
+          });
+          toast(`${selectedPropose.size === 1 ? 'Terminvorschlag' : `${selectedPropose.size} Terminvorschläge`} gesendet!`);
+          selectedPropose.clear();
+          proposeMode = false;
+          await load();
+        } catch (err) {
+          toast(err.message, 'error');
+          btn.disabled = false;
+        }
+      });
+
+      body.querySelector('#admin-reset-sched')?.addEventListener('click', async () => {
+        const ok = await confirmModal(
+          'Termin-Einigung zurücksetzen?',
+          `Der feste Termin bzw. aktuelle Vorschlag für <b>${esc(data.teamA.name)} vs. ${esc(data.teamB.name)}</b> wird aufgehoben, sodass sich die Teams neu einigen können.`,
+          'Zurücksetzen'
+        );
+        if (!ok) return;
+        try {
+          await api(`/matchups/${matchupId}/schedule`, { method: 'PUT', body: { action: 'reset' } });
+          toast('Termin-Einigung wurde zurückgesetzt.');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+
+      body.querySelector('#admin-set-sched')?.addEventListener('click', async () => {
+        const allSlots = [];
+        for (const d of dates) for (const h of HOURS) allSlots.push(key(d, h));
+        const otherSlots = allSlots.filter((k) => !perfect.includes(k) && !maybe.some((x) => x.k === k));
+        const optSuffix = (k) => {
+          const cs = conflictsFor(k);
+          if (!cs.length) return '';
+          return ` [📺⚠️ ${cs.some((c) => c.exact) ? 'Parallelspiel' : 'Überschneidung ~1,5h'}]`;
+        };
+        const ok = await modal({
+          title: '🏆 Spieltermin als Admin festlegen',
+          confirmText: 'Verbindlich speichern',
+          body: `
+            <p>Wähle den festen Spieltermin für <b>${esc(data.teamA.name)} vs. ${esc(data.teamB.name)}</b>:</p>
+            <label class="field" style="margin-top:10px">
+              <span>Datum & Uhrzeit</span>
+              <select name="slot" required>
+                ${perfect.length ? `<optgroup label="🏆 Perfekte Termine (alle ${n} Grün)">${perfect.map((k) => `<option value="${k}" ${m.confirmed_slot === k ? 'selected' : ''}>${slotLabel(k)} (${n}/${n} Grün)${optSuffix(k)}</option>`).join('')}</optgroup>` : ''}
+                ${maybe.length ? `<optgroup label="⚡ Mögliche Optionen (kein Rot)">${maybe.map((x) => `<option value="${x.k}" ${m.confirmed_slot === x.k ? 'selected' : ''}>${slotLabel(x.k)} (${x.g} Grün, ${x.y} Gelb)${optSuffix(x.k)}</option>`).join('')}</optgroup>` : ''}
+                <optgroup label="Alle weiteren Stunden (${esc(phase.name)})">
+                  ${otherSlots.map((k) => { const i = info(k); return `<option value="${k}" ${m.confirmed_slot === k ? 'selected' : ''}>${slotLabel(k)} (${i.g}✓ ${i.y}? ${i.r}✕)${optSuffix(k)}</option>`; }).join('')}
+                </optgroup>
+              </select>
+            </label>`,
+          onConfirm: async (form) => {
+            await api(`/matchups/${matchupId}/schedule`, {
+              method: 'PUT',
+              body: { action: 'set', slot: form.slot.value },
+            });
+          },
+        });
+        if (ok) {
+          toast('Fester Spieltermin wurde vom Admin gespeichert.');
+          await load();
+        }
+      });
 
       const gridBox = body.querySelector('#match-grid');
       gridBox.innerHTML = gridHTML(phase, {
         cellHTML: (d, h) => {
           const k = key(d, h);
           const i = info(k);
-          const txt = i.cls === 'm-perfect' ? `${i.g}/${n}` : i.cls === 'm-maybe' ? `${i.g}✓ ${i.y}?` : n ? `${n - i.r}/${n}` : '–';
-          return `<td class="cell mcell ${i.cls}" data-k="${k}"><span class="mc">${txt}</span></td>`;
+          const isConf = m.confirmed_slot === k;
+          const isProp = !m.confirmed_slot && propSlots.includes(k);
+          const isSel = !m.confirmed_slot && selectedPropose.has(k);
+          const cs = conflictsFor(k);
+          const hasExact = cs.some((c) => c.exact);
+          let txt = i.cls === 'm-perfect' ? `${i.g}/${n}` : i.cls === 'm-maybe' ? `${i.g}✓ ${i.y}?` : n ? `${n - i.r}/${n}` : '–';
+          if (isConf) txt = `🏆 FIX`;
+          else if (isProp) txt = `📩 ${txt}`;
+          else if (isSel) txt = `✓ ${txt}`;
+          const tvBadge = cs.length && !isConf
+            ? `<span class="tv-cell-badge ${hasExact ? 'exact' : 'overlap'}" title="${esc(conflictTitle(k))}">📺${hasExact ? cs.length : '~'}</span>`
+            : '';
+          const extraCls = [
+            isConf ? 'is-confirmed' : '',
+            isProp ? 'is-proposed' : '',
+            isSel ? 'is-selected' : '',
+            cs.length ? (hasExact ? 'has-tv-exact' : 'has-tv-overlap') : '',
+          ].filter(Boolean).join(' ');
+          return `<td class="cell mcell ${i.cls} ${extraCls}" data-k="${k}"><span class="mc">${txt}</span>${tvBadge}</td>`;
         },
       });
 
       const showTip = (td) => {
         const k = td.dataset.k;
         const i = info(k);
+        const cs = conflictsFor(k);
         const row = (p) => { const s = statusOf(p.id, k); return `<li><i class="dot s-${s}"></i><span>${esc(p.name)}${p.id === highlightPlayer ? ' (du)' : ''}</span><b class="t-${s}">${hasSaved(p.id) ? STATUS_LABEL[s] : 'nicht eingetragen'}</b></li>`; };
-        const verdict = i.cls === 'm-perfect' ? '<span class="t-green">Perfekter Match-Termin</span>' : i.cls === 'm-maybe' ? '<span class="t-yellow">Mögliche Option</span>' : '<span class="t-red">Nicht möglich</span>';
+        const verdict = m.confirmed_slot === k
+          ? '<span class="t-green">🏆 Fester Spieltermin</span>'
+          : i.cls === 'm-perfect' ? '<span class="t-green">Perfekter Match-Termin</span>' : i.cls === 'm-maybe' ? '<span class="t-yellow">Mögliche Option</span>' : '<span class="t-red">Nicht möglich</span>';
+
+        const tipConflictHTML = cs.length ? `
+          <div class="tip-conflict">
+            <b>📺⚠️ Achtung – Parallelspiel / Überschneidung (~1,5h Spielzeit):</b>
+            <ul>
+              ${cs.map((c) => `<li><b>${esc(c.team_a_name)} vs. ${esc(c.team_b_name)}</b> · Start ${pad2(c.otherHour)}:00 Uhr (läuft bis ~${pad2(c.otherHour + 1)}:30 Uhr)</li>`).join('')}
+            </ul>
+            <small>Wenn möglich anderen Termin wählen, damit Spiele einzeln gestreamt & geschaut werden können.</small>
+          </div>` : '';
+
+        let tipAction = '';
+        if (allSaved && !m.confirmed_slot && mePlayer && (i.cls === 'm-perfect' || i.cls === 'm-maybe')) {
+          if (propSlots.includes(k) && myTeamId !== m.proposed_by_team_id && !proposeMode) {
+            tipAction = `<div class="tip-actions"><button type="button" class="btn btn-sm btn-primary btn-block" data-tip-confirm="${k}">✓ Diesen Termin verbindlich bestätigen</button></div>`;
+          } else if (propSlots.length === 0 || proposeMode) {
+            const sel = selectedPropose.has(k);
+            tipAction = `<div class="tip-actions"><button type="button" class="btn btn-sm ${sel ? 'btn-ghost' : 'btn-primary'} btn-block" data-tip-pick="${k}">${sel ? '✕ Aus Auswahl entfernen' : '+ Für Vorschlag auswählen (max. 3)'}</button></div>`;
+          }
+        }
+
         tip.innerHTML = `
           <div class="tip-head"><b>${slotLabel(k)}</b>${verdict}</div>
+          ${tipConflictHTML}
           <div class="tip-teams">
             <div><h5>${esc(data.teamA.name)}</h5><ul>${data.teamA.players.map(row).join('')}</ul></div>
             <div><h5>${esc(data.teamB.name)}</h5><ul>${data.teamB.players.map(row).join('')}</ul></div>
           </div>
-          <div class="tip-foot">${i.g} grün · ${i.y} gelb · ${i.r} rot</div>`;
+          <div class="tip-foot">${i.g} grün · ${i.y} gelb · ${i.r} rot</div>
+          ${tipAction}`;
         tip.hidden = false;
+        tip.querySelector('[data-tip-pick]')?.addEventListener('click', () => { hideTip(); togglePickSlot(k); });
+        tip.querySelector('[data-tip-confirm]')?.addEventListener('click', () => { hideTip(); confirmChosenSlot(k); });
         const r = td.getBoundingClientRect();
         const tw = tip.offsetWidth, th = tip.offsetHeight;
         let left = Math.max(8, Math.min(r.left + r.width / 2 - tw / 2, window.innerWidth - tw - 8));
@@ -814,7 +1346,9 @@
       }
     };
     await load();
-    const timer = setInterval(() => { if (!document.hidden && tip.hidden) load(); }, REFRESH_MS);
+    const timer = setInterval(() => {
+      if (!document.hidden && tip.hidden && selectedPropose.size === 0 && !proposeMode) load();
+    }, REFRESH_MS);
     onCleanup(() => clearInterval(timer));
   }
 
@@ -879,7 +1413,7 @@
             <span><b>${teams.length}</b> Teams</span>
             <span><b>${players.length}</b> Spieler</span>
             <span><b>${full}</b>/${teams.length} vollständig</span>
-            <button class="btn btn-sm btn-ghost" id="seed-demo-btn" title="8 Teams, 24 Spieler & Woche 1 Paarungen laden">🎁 Demo-Daten ${teams.length ? 'neu generieren' : 'laden'}</button>
+            <button class="btn btn-sm btn-ghost" id="seed-demo-btn" title="Alle 18 Teams, 53 Spieler & alle 5 Test-Szenarien (inkl. Termin-Einigung & Stream-Radar) neu laden">🔄 Test-Szenarien zurücksetzen</button>
           </div>
         </div>
         ${teams.length ? `<div class="team-grid">${teams.map((t) => `
@@ -948,11 +1482,15 @@
       await refresh();
     });
     root.querySelector('#seed-demo-btn')?.addEventListener('click', async () => {
-      const ok = await confirmModal('Demo-Daten laden?', 'Möchtest du 8 Demo-Teams à 3 Spieler, Paarungen für Woche 1 und Kalenderzeiten anlegen? Bereits existierende Teams bleiben unberührt.', 'Demo-Daten laden');
+      const ok = await confirmModal(
+        'Test-Szenarien neu laden?',
+        'Möchtest du die 18 realen Teams (53 Spieler) samt aller 5 Test-Szenarien pro Team (feste Termine, eingehende/ausgehende Anfragen, offene Abstimmungen & Stream-Radar) frisch zurücksetzen?',
+        'Ja, Test-Szenarien neu laden'
+      );
       if (!ok) return;
       try {
-        await api('/admin/seed-demo', { method: 'POST' });
-        toast('Demo-Daten erfolgreich generiert!');
+        await api('/admin/seed-demo', { method: 'POST', body: { force: true } });
+        toast('Test-Szenarien wurden frisch geladen!');
         await refresh();
       } catch (err) {
         fail(err);
@@ -991,15 +1529,27 @@
     const used = new Set(list.flatMap((m) => [m.team_a_id, m.team_b_id]));
     const free = teams.filter((t) => !used.has(t.id));
     const opts = (sel) => teams.map((t) => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)} (${t.players.length}/3)</option>`).join('');
-    const viewRow = (m) => `
-      <li class="mu-row" data-id="${m.id}">
-        <div class="mu-teams"><span class="mu-team">${esc(m.team_a_name)}</span><span class="vs-sm">vs.</span><span class="mu-team">${esc(m.team_b_name)}</span></div>
-        <div class="actions">
-          <a class="btn btn-sm btn-ghost" href="#/admin/match/${m.id}">📊 Abgleich</a>
-          <button class="icon-btn" data-act="edit" title="Bearbeiten">✎</button>
-          <button class="icon-btn danger" data-act="delete" title="Löschen">🗑</button>
-        </div>
-      </li>`;
+    const viewRow = (m) => {
+      const propSlots = Array.isArray(m.proposed_slots) ? m.proposed_slots : [];
+      const schedBadge = m.confirmed_slot
+        ? `<span class="badge ok">🏆 Fest: ${slotLabel(m.confirmed_slot)}</span>`
+        : propSlots.length
+          ? `<span class="badge warn">📩 ${propSlots.length} Vorschl. offen</span>`
+          : `<span class="badge open">⏳ Termin offen</span>`;
+      return `
+        <li class="mu-row" data-id="${m.id}">
+          <div class="mu-teams">
+            <span class="mu-team">${esc(m.team_a_name)}</span><span class="vs-sm">vs.</span><span class="mu-team">${esc(m.team_b_name)}</span>
+            ${schedBadge}
+          </div>
+          <div class="actions">
+            ${m.confirmed_slot || propSlots.length ? `<button class="btn btn-sm btn-ghost" data-act="reset-sched" title="Termin-Einigung zurücksetzen / freigeben">🔓 Freigeben</button>` : ''}
+            <a class="btn btn-sm btn-ghost" href="#/admin/match/${m.id}">📊 Abgleich & Termin</a>
+            <button class="icon-btn" data-act="edit" title="Bearbeiten">✎</button>
+            <button class="icon-btn danger" data-act="delete" title="Löschen">🗑</button>
+          </div>
+        </li>`;
+    };
 
     const root = el(`
       <div>
@@ -1054,6 +1604,10 @@
           </form>`));
       } else if (btn.dataset.act === 'cancel') {
         refresh();
+      } else if (btn.dataset.act === 'reset-sched' && m) {
+        const ok = await confirmModal('Termin-Einigung zurücksetzen?', `Der feste Termin bzw. Vorschlag für <b>${esc(m.team_a_name)} vs. ${esc(m.team_b_name)}</b> wird aufgehoben, sodass sich die Teams neu einigen können.`, 'Zurücksetzen');
+        if (!ok) return;
+        try { await api(`/matchups/${m.id}/schedule`, { method: 'PUT', body: { action: 'reset' } }); toast('Termin freigegeben'); await refresh(); } catch (err) { toast(err.message, 'error'); }
       } else if (btn.dataset.act === 'delete' && m) {
         const ok = await confirmModal('Paarung löschen?', `<b>${esc(m.team_a_name)}</b> vs. <b>${esc(m.team_b_name)}</b> (${esc(phase.name)}) wird gelöscht. Die gespeicherten Zeiten der Spieler bleiben erhalten.`);
         if (!ok) return;
@@ -1072,12 +1626,20 @@
     const root = el(`
       <div>
         <section class="card metal">
-          <h3 class="card-title">⚔ Paarungs-Abgleich</h3>
-          <p class="muted">Klicke auf eine Paarung, um die 6-Spieler-Schnittmengen-Ansicht zu öffnen.</p>
+          <h3 class="card-title">⚔ Paarungs-Abgleich & Vereinbarte Spieltermine</h3>
+          <p class="muted">Klicke auf eine Paarung, um den 6-Spieler-Abgleich zu öffnen oder den festen Termin als Admin zu verwalten.</p>
           ${matchups.length ? PHASES.filter((p) => matchups.some((m) => m.phase_id === p.id)).map((p) => `
             <div class="mu-group c-${p.color}">
               <h4><i class="dot"></i>W${p.week} · ${esc(p.name)}${p.subtitle ? ` <small>${esc(p.subtitle)}</small>` : ''} <span class="muted small">${formatRange(p)}</span></h4>
-              <div class="mu-buttons">${matchups.filter((m) => m.phase_id === p.id).map((m) => `<a class="mu-btn" href="#/admin/match/${m.id}">${esc(m.team_a_name)} <span>vs</span> ${esc(m.team_b_name)}</a>`).join('')}</div>
+              <div class="mu-buttons">${matchups.filter((m) => m.phase_id === p.id).map((m) => {
+                const propLen = Array.isArray(m.proposed_slots) ? m.proposed_slots.length : 0;
+                const badge = m.confirmed_slot
+                  ? `<small class="mu-sched-tag ok">🏆 ${slotLabel(m.confirmed_slot)}</small>`
+                  : propLen
+                    ? `<small class="mu-sched-tag warn">📩 ${propLen} Vorschl.</small>`
+                    : '';
+                return `<a class="mu-btn" href="#/admin/match/${m.id}">${esc(m.team_a_name)} <span>vs</span> ${esc(m.team_b_name)}${badge}</a>`;
+              }).join('')}</div>
             </div>`).join('') : '<div class="notice">Noch keine Paarungen angelegt. → Tab „Paarungen“</div>'}
         </section>
 
@@ -1169,14 +1731,14 @@
       <div class="phase-view embedded c-${phase.color}">
         <div class="pv-head metal">
           <a class="btn btn-ghost btn-sm" href="#/admin/insight">← Zurück</a>
-          <div class="pv-title"><span class="pv-dot"></span><div><h1>${esc(phase.name)}${phase.subtitle ? ` <small>${esc(phase.subtitle)}</small>` : ''}</h1><p>Woche ${phase.week} · ${formatRange(phase)} · Paarungs-Abgleich</p></div></div>
+          <div class="pv-title"><img src="/logo.png" alt="3vs3" class="pv-crest"><span class="pv-dot"></span><div><h1>${esc(phase.name)}${phase.subtitle ? ` <small>${esc(phase.subtitle)}</small>` : ''}</h1><p>Woche ${phase.week} · ${formatRange(phase)} · Paarungs-Abgleich</p></div></div>
         </div>
         <div class="pv-content" id="am-body"></div>
       </div>`;
     const chooser = siblings.length > 1
-      ? `<div class="mu-chooser">${siblings.map((x) => `<a href="#/admin/match/${x.id}" class="chip ${x.id === m.id ? 'active' : ''}">${esc(x.team_a_name)} vs. ${esc(x.team_b_name)}</a>`).join('')}</div>`
+      ? `<div class="mu-chooser">${siblings.map((x) => `<a href="#/admin/match/${x.id}" class="chip ${x.id === m.id ? 'active' : ''}">${esc(x.team_a_name)} vs. ${esc(x.team_b_name)} ${x.confirmed_slot ? '🏆' : ''}</a>`).join('')}</div>`
       : '';
-    await mountMatchView(body.querySelector('#am-body'), phase, m.id, { prefix: chooser });
+    await mountMatchView(body.querySelector('#am-body'), phase, m.id, { prefix: chooser, isAdmin: true });
   }
 
   // ---------- Start ----------

@@ -1,0 +1,19 @@
+{
+  "name": "3vs3-terminfinder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloud-basiertes Terminfindungs-Tool für ein 3vs3-Turnier (Winter 2026)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed:demo": "node scripts/seed-demo.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
