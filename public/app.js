@@ -427,8 +427,20 @@
     if (existing) existing.remove();
 
     const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop notif-backdrop';
+    backdrop.className = 'modal-backdrop notif-backdrop show';
     backdrop.id = 'notif-modal-backdrop';
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+    };
 
     const renderModalContent = () => {
       const list = me.notifications || [];
@@ -509,9 +521,8 @@
           </div>
         </div>`;
 
-      const close = () => backdrop.remove();
       backdrop.querySelector('#nc-close-btn')?.addEventListener('click', close);
-      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+      backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
 
       backdrop.querySelector('#nc-mark-all-btn')?.addEventListener('click', async () => {
         try {

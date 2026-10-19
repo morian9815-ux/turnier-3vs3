@@ -1704,6 +1704,8 @@ input:disabled { opacity: 0.45; }
 /* Nachrichtenzentrale Modal */
 .notif-backdrop {
   z-index: 1200;
+  opacity: 1;
+  pointer-events: auto;
 }
 .notif-modal {
   width: min(740px, 95vw);
@@ -1713,6 +1715,7 @@ input:disabled { opacity: 0.45; }
   padding: 0;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.18);
+  transform: none;
 }
 .nc-head {
   display: flex;
