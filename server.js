@@ -2,11 +2,20 @@
 try { process.loadEnvFile(); } catch { /* keine .env vorhanden */ }
 
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { initDb } = require('./db');
 const { HOURS, STATUSES, getPhase, phaseDates } = require('./public/phases.js');
 const { seedDemoData } = require('./scripts/seed-demo.js');
+const {
+  LOGOS_DIR,
+  ALLOWED_EXT,
+  logoUrlFromFilename,
+  listAvailableLogos,
+  matchLogoForTeamName,
+  autoAssignTeamLogos,
+} = require('./scripts/team-logos.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin2026';
@@ -18,8 +27,16 @@ const MAX_PLAYERS_PER_TEAM = 3;
 let db;
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '8mb' }));
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+app.use('/team-logos', express.static(LOGOS_DIR, { maxAge: 0 }));
+app.get('/team-logos/:file', (req, res) => {
+  const requested = String(req.params.file || '').normalize('NFC').toLowerCase();
+  const logos = listAvailableLogos();
+  const hit = logos.find((l) => l.filename.normalize('NFC').toLowerCase() === requested);
+  if (hit) return res.sendFile(path.join(LOGOS_DIR, hit.filename));
+  res.status(404).end();
+});
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0 }));
 
 // ---------- Helfer ----------
@@ -68,7 +85,8 @@ function requireAdmin(req, res, next) {
 
 const MATCHUP_SELECT = `
   SELECT m.id, m.phase_id, m.team_a_id, m.team_b_id,
-         ta.name AS team_a_name, tb.name AS team_b_name,
+         ta.name AS team_a_name, ta.logo AS team_a_logo,
+         tb.name AS team_b_name, tb.logo AS team_b_logo,
          m.proposed_slots, m.proposed_by_team_id, m.proposed_by_player_name,
          m.confirmed_slot, m.confirmed_by_player_name
   FROM matchups m
@@ -184,7 +202,9 @@ async function loadMatchupContext(mid) {
         team_a_id: x.team_a_id,
         team_b_id: x.team_b_id,
         team_a_name: x.team_a_name,
+        team_a_logo: x.team_a_logo || null,
         team_b_name: x.team_b_name,
+        team_b_logo: x.team_b_logo || null,
         confirmed_slot: x.confirmed_slot,
         is_own_team: isOwn,
       };
@@ -208,8 +228,8 @@ async function loadMatchupContext(mid) {
     matchup: m,
     phase,
     players,
-    teamA: { id: m.team_a_id, name: m.team_a_name, players: teamAPlayers },
-    teamB: { id: m.team_b_id, name: m.team_b_name, players: teamBPlayers },
+    teamA: { id: m.team_a_id, name: m.team_a_name, logo: m.team_a_logo || null, players: teamAPlayers },
+    teamB: { id: m.team_b_id, name: m.team_b_name, logo: m.team_b_logo || null, players: teamBPlayers },
     availability,
     allSaved,
     checkSlot,
@@ -219,9 +239,9 @@ async function loadMatchupContext(mid) {
 }
 
 async function loadTeams() {
-  const teams = await db.all('SELECT id, name FROM teams ORDER BY LOWER(name), id');
+  const teams = await db.all('SELECT id, name, logo FROM teams ORDER BY LOWER(name), id');
   const players = await db.all('SELECT id, name, team_id FROM players ORDER BY id');
-  return teams.map((t) => ({ ...t, players: players.filter((p) => p.team_id === t.id) }));
+  return teams.map((t) => ({ ...t, logo: t.logo || null, players: players.filter((p) => p.team_id === t.id) }));
 }
 
 async function ensureUniqueTeamName(name, exceptId = 0) {
@@ -252,7 +272,7 @@ app.get('/api/health', wrap(async (req, res) => {
 
 app.get('/api/players', wrap(async (req, res) => {
   res.json(await db.all(`
-    SELECT p.id, p.name, p.team_id, t.name AS team_name
+    SELECT p.id, p.name, p.team_id, t.name AS team_name, t.logo AS team_logo
     FROM players p LEFT JOIN teams t ON t.id = p.team_id
     ORDER BY LOWER(p.name), p.id`));
 }));
@@ -272,7 +292,7 @@ app.get('/api/matchups', wrap(async (req, res) => {
 app.get('/api/players/:id', wrap(async (req, res) => {
   const pid = toId(req.params.id);
   const player = await db.get(`
-    SELECT p.id, p.name, p.team_id, t.name AS team_name
+    SELECT p.id, p.name, p.team_id, t.name AS team_name, t.logo AS team_logo
     FROM players p LEFT JOIN teams t ON t.id = p.team_id WHERE p.id = ?`, [pid]);
   if (!player) throw notFound('Spieler nicht gefunden.');
   const teammates = player.team_id
@@ -560,21 +580,70 @@ app.get('/api/admin/save-status', requireAdmin, wrap(async (req, res) => {
   res.json(await db.all('SELECT DISTINCT player_id, phase_id FROM availabilities'));
 }));
 
-// Teams
+// Teams & Logos
+app.get('/api/admin/logos', requireAdmin, wrap(async (req, res) => {
+  res.json({ logos: listAvailableLogos() });
+}));
+
+app.post('/api/admin/logos/auto-assign', requireAdmin, wrap(async (req, res) => {
+  const overwrite = Boolean(req.body?.overwrite);
+  const result = await autoAssignTeamLogos(db, { overwrite });
+  res.json(result);
+}));
+
+app.post('/api/admin/logos/upload', requireAdmin, wrap(async (req, res) => {
+  const rawName = String(req.body?.filename || '').trim();
+  const dataUrl = String(req.body?.dataUrl || '');
+  const teamId = req.body?.team_id ? toId(req.body.team_id) : null;
+  if (!rawName || !dataUrl) throw bad('Dateiname und Bilddaten erforderlich.');
+
+  const ext = path.extname(rawName).toLowerCase();
+  if (!ALLOWED_EXT.has(ext)) {
+    throw bad('Ungültiges Bildformat. Erlaubt sind: .webp, .png, .jpg, .jpeg, .svg, .gif, .avif');
+  }
+  const base = path.basename(rawName, ext).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'team-logo';
+  const safeFilename = `${base}${ext}`;
+  const match = dataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  if (!match) throw bad('Ungültige Bilddaten (Data-URL erwartet).');
+  const buf = Buffer.from(match[1], 'base64');
+  if (!buf.length || buf.length > 5 * 1024 * 1024) {
+    throw bad('Bilddatei ist leer oder größer als 5 MB.');
+  }
+
+  fs.mkdirSync(LOGOS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(LOGOS_DIR, safeFilename), buf);
+  const url = logoUrlFromFilename(safeFilename);
+
+  if (teamId) {
+    await db.run('UPDATE teams SET logo = ? WHERE id = ?', [url, teamId]);
+  }
+  res.json({ ok: true, filename: safeFilename, url, logos: listAvailableLogos() });
+}));
+
 app.post('/api/teams', requireAdmin, wrap(async (req, res) => {
   const name = cleanName(req.body?.name, 'Teamname');
   await ensureUniqueTeamName(name);
-  const row = await db.get('INSERT INTO teams (name) VALUES (?) RETURNING id, name', [name]);
+  const rawLogo = req.body?.logo ? String(req.body.logo).trim() : null;
+  const logo = rawLogo || matchLogoForTeamName(name);
+  const row = await db.get('INSERT INTO teams (name, logo) VALUES (?, ?) RETURNING id, name, logo', [name, logo]);
   res.status(201).json(row);
 }));
 
 app.put('/api/teams/:id', requireAdmin, wrap(async (req, res) => {
   const tid = toId(req.params.id);
-  const name = cleanName(req.body?.name, 'Teamname');
-  await ensureUniqueTeamName(name, tid);
-  const r = await db.run('UPDATE teams SET name = ? WHERE id = ?', [name, tid]);
-  if (!r.changes) throw notFound('Team nicht gefunden.');
-  res.json({ id: tid, name });
+  const existing = await db.get('SELECT id, name, logo FROM teams WHERE id = ?', [tid]);
+  if (!existing) throw notFound('Team nicht gefunden.');
+  const body = req.body || {};
+  const name = body.name !== undefined ? cleanName(body.name, 'Teamname') : existing.name;
+  if (name !== existing.name) await ensureUniqueTeamName(name, tid);
+  let logo = existing.logo || null;
+  if (Object.prototype.hasOwnProperty.call(body, 'logo')) {
+    logo = body.logo ? String(body.logo).trim() : null;
+  } else if (!logo && name !== existing.name) {
+    logo = matchLogoForTeamName(name);
+  }
+  await db.run('UPDATE teams SET name = ?, logo = ? WHERE id = ?', [name, logo, tid]);
+  res.json({ id: tid, name, logo });
 }));
 
 app.delete('/api/teams/:id', requireAdmin, wrap(async (req, res) => {
@@ -735,8 +804,9 @@ initDb()
       if (process.env.AUTO_SEED !== 'false') {
         await seedDemoData(db);
       }
+      await autoAssignTeamLogos(db);
     } catch (err) {
-      console.error('Hinweis beim Demo-Seed:', err.message);
+      console.error('Hinweis beim Demo-Seed / Logo-Abgleich:', err.message);
     }
     app.listen(PORT, () => {
       console.log(`3vs3 Terminfinder läuft auf http://localhost:${PORT}  (Datenbank: ${db.kind}${db.file ? ' → ' + db.file : ''})`);

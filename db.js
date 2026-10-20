@@ -12,7 +12,8 @@ const fs = require('fs');
 const SCHEMA_PG = `
 CREATE TABLE IF NOT EXISTS teams (
   id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  logo TEXT
 );
 CREATE TABLE IF NOT EXISTS players (
   id SERIAL PRIMARY KEY,
@@ -59,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_notif_player ON notifications(player_id, is_read,
 const SCHEMA_SQLITE = SCHEMA_PG.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT');
 
 const MIGRATIONS = [
+  'ALTER TABLE teams ADD COLUMN logo TEXT',
   'ALTER TABLE matchups ADD COLUMN proposed_slots TEXT',
   'ALTER TABLE matchups ADD COLUMN proposed_by_team_id INTEGER',
   'ALTER TABLE matchups ADD COLUMN proposed_by_player_name TEXT',

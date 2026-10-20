@@ -10,6 +10,7 @@
  */
 const { TEAMS } = require('./seed-teams.js');
 const { HOURS, getPhase, phaseDates } = require('../public/phases.js');
+const { listAvailableLogos, matchLogoForTeamName, autoAssignTeamLogos } = require('./team-logos.js');
 
 const SEED_MIN_MATCHUPS = 40;
 
@@ -42,11 +43,13 @@ async function seedDemoData(db, { force = false } = {}) {
   } catch { /* Tabelle ggf. neu */ }
 
   if (!force && existingTeams.length > 0 && existingMatchups.length >= SEED_MIN_MATCHUPS && existingNotifs.length > 0) {
+    await autoAssignTeamLogos(db);
     console.log('Multi-Szenario-Testdaten sind bereits vorhanden – bestehende Daten bleiben erhalten.');
     return { ok: true, skipped: true };
   }
 
   const rand = createRng(20261109);
+  const availableLogos = listAvailableLogos();
 
   return await db.tx(async (tx) => {
     // Vorhandene Daten sauber zurücksetzen, falls ein älterer Stand oder force=true vorliegt
@@ -60,16 +63,17 @@ async function seedDemoData(db, { force = false } = {}) {
     const createdTeams = [];
     let playerCount = 0;
 
-    // 1. Alle 18 realen Teams und 53 Spieler anlegen
+    // 1. Alle 18 realen Teams und 53 Spieler anlegen (inkl. automatischer Logo-Zuordnung)
     for (const [name, players] of Object.entries(TEAMS)) {
-      const t = await tx.get('INSERT INTO teams (name) VALUES (?) RETURNING id', [name]);
+      const logo = matchLogoForTeamName(name, availableLogos);
+      const t = await tx.get('INSERT INTO teams (name, logo) VALUES (?, ?) RETURNING id', [name, logo]);
       const pObjs = [];
       for (const pName of players) {
         const row = await tx.get('INSERT INTO players (name, team_id) VALUES (?, ?) RETURNING id', [pName, t.id]);
         pObjs.push({ id: row.id, name: pName, team_id: t.id });
         playerCount++;
       }
-      createdTeams.push({ id: t.id, name, players: pObjs });
+      createdTeams.push({ id: t.id, name, logo, players: pObjs });
     }
 
     const addNotifs = async (playerIds, { kind, title, body, phase_id, matchup_id, is_read = 0, created_at }) => {
