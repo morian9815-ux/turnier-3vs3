@@ -383,7 +383,7 @@
             </div>
           </div>
           <div class="nsb-actions">
-            <button type="button" class="btn btn-amber btn-sm" id="nsb-open-btn">📬 Nachrichtenzentrale öffnen</button>
+            <button type="button" class="btn btn-amber btn-sm" id="nsb-open-btn"><span class="hl-long">📬 Nachrichtenzentrale öffnen</span><span class="hl-short">📬 Nachrichten öffnen</span></button>
             <button type="button" class="btn btn-steel btn-sm" id="nsb-readall-btn" title="Alle als gelesen markieren">✓ Alle gelesen</button>
           </div>
         </div>
@@ -796,7 +796,6 @@
               </div>
               <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
             </div>
-            ${colorGuideHTML}
             ${actionMatches.length
               ? `<div class="m-row-list">${actionMatches.map(renderMatchRow).join('')}</div>`
               : `<div class="card metal filter-empty-state">
@@ -814,7 +813,6 @@
               </div>
               <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
             </div>
-            ${colorGuideHTML}
             ${waitingMatches.length
               ? `<div class="m-row-list">${waitingMatches.map(renderMatchRow).join('')}</div>`
               : `<div class="card metal filter-empty-state">
@@ -832,7 +830,6 @@
               </div>
               <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
             </div>
-            ${colorGuideHTML}
             ${confirmedMatches.length
               ? `<div class="m-row-list">${confirmedMatches.map(renderMatchRow).join('')}</div>`
               : `<div class="card metal filter-empty-state">
@@ -849,7 +846,6 @@
                 <p class="muted">Alle angesetzten Paarungen deines Teams – sortiert nach Handlungsbedarf:</p>
               </div>
             </div>
-            ${colorGuideHTML}
             ${openMatches.length ? `
               <div class="m-group">
                 ${confirmedMatches.length ? `<h3 class="m-group-title">Offene Abstimmungen (${openMatches.length})</h3>` : ''}
@@ -928,7 +924,8 @@
               <span class="hfb-cnt">${actionMatches.length}</span>
             </button>
             <button type="button" class="btn btn-sm hfb-btn ${flt === 'waiting' ? 'btn-blue is-active' : 'btn-steel'}" data-home-filter="waiting">
-              <span>⏳ Wartet auf andere</span>
+              <span class="hl-long">⏳ Wartet auf andere</span>
+              <span class="hl-short">⏳ Wartet noch</span>
               <span class="hfb-cnt">${waitingMatches.length}</span>
             </button>
             <button type="button" class="btn btn-sm hfb-btn ${flt === 'confirmed' ? 'btn-primary is-active' : 'btn-steel'}" data-home-filter="confirmed">
@@ -943,6 +940,7 @@
         </nav>
         ${showMatchesSection ? matchesContentHTML : ''}
         ${showCalendarSection ? calendarSectionHTML : ''}
+        ${colorGuideHTML}
       `;
     };
 
