@@ -172,11 +172,27 @@
   }
 
   // ---------- Router ----------
-  window.addEventListener('hashchange', () => {
+  let handlingUnsavedHash = false;
+  window.addEventListener('hashchange', async () => {
     if (ignoreHash) { ignoreHash = false; return; }
-    if (dirty && !confirm('Du hast ungespeicherte Änderungen. Wirklich verwerfen?')) {
+    if (dirty) {
+      if (handlingUnsavedHash) return;
+      handlingUnsavedHash = true;
+      const targetHash = location.hash;
       ignoreHash = true;
       location.hash = currentHash;
+      const ok = await modal({
+        title: 'Ungespeicherte Änderungen',
+        body: '<p>Du hast Änderungen an deinen Zeiten vorgenommen, die noch nicht gespeichert wurden. Möchtest du die Seite wirklich verlassen und deine Änderungen verwerfen?</p>',
+        confirmText: 'Ja, verwerfen',
+        cancelText: 'Zurück zum Kalender',
+        danger: true,
+      });
+      handlingUnsavedHash = false;
+      if (ok) {
+        dirty = false;
+        go(targetHash);
+      }
       return;
     }
     dirty = false;
@@ -184,7 +200,21 @@
   });
   window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
-  function go(hash) {
+  async function go(hash) {
+    if (dirty) {
+      if (handlingUnsavedHash) return;
+      handlingUnsavedHash = true;
+      const ok = await modal({
+        title: 'Ungespeicherte Änderungen',
+        body: '<p>Du hast Änderungen an deinen Zeiten vorgenommen, die noch nicht gespeichert wurden. Möchtest du die Seite wirklich verlassen und deine Änderungen verwerfen?</p>',
+        confirmText: 'Ja, verwerfen',
+        cancelText: 'Zurück zum Kalender',
+        danger: true,
+      });
+      handlingUnsavedHash = false;
+      if (!ok) return;
+      dirty = false;
+    }
     if (location.hash === hash) route();
     else location.hash = hash;
   }
@@ -367,27 +397,9 @@
   }
 
   function notifStartBanner(me) {
-    const unread = Number(me.unreadCount || 0);
-    if (unread <= 0) return '<div id="notif-start-banner-wrap"></div>';
-    const unreadList = (me.notifications || []).filter((n) => !n.is_read);
-    const newest = unreadList[0];
-    const meta = newest ? notifMeta(newest.kind) : { icon: '🔔' };
-    return `
-      <div id="notif-start-banner-wrap">
-        <div class="notif-slim-banner metal" id="notif-slim-banner" role="region" aria-label="Ungelesene Nachrichten">
-          <div class="nsb-left">
-            <span class="notif-red-badge lg">${unread}</span>
-            <div class="nsb-text">
-              <b>Du hast ${unread === 1 ? '1 neue, ungelesene Nachricht' : `${unread} neue, ungelesene Nachrichten`}!</b>
-              ${newest ? `<span class="nsb-preview">${meta.icon} <em>${esc(newest.title)}</em>${unread > 1 ? ` · und ${unread - 1} weitere` : ''}</span>` : ''}
-            </div>
-          </div>
-          <div class="nsb-actions">
-            <button type="button" class="btn btn-amber btn-sm" id="nsb-open-btn"><span class="hl-long">📬 Nachrichtenzentrale öffnen</span><span class="hl-short">📬 Nachrichten öffnen</span></button>
-            <button type="button" class="btn btn-steel btn-sm" id="nsb-readall-btn" title="Alle als gelesen markieren">✓ Alle gelesen</button>
-          </div>
-        </div>
-      </div>`;
+    // Entschlackt: Der große rote Alarm-Banner wird nicht mehr auf der Startseite angezeigt,
+    // um ältere Spieler nicht zu überfordern. Die Nachrichten bleiben über die Glocke oben erreichbar.
+    return '<div id="notif-start-banner-wrap"></div>';
   }
 
   function playerTopbar(me) {
@@ -677,6 +689,80 @@
     const waitingMatches = openMatches.filter((x) => !x.needsAction);
     const confirmedMatches = enriched.filter((x) => x.isConfirmed);
 
+    const renderFocusHero = () => {
+      const incoming = enriched.find((x) => x.isIncoming);
+      const missingMy = enriched.find((x) => !x.isConfirmed && !x.mySaved);
+      const ready = enriched.find((x) => x.isReady);
+      const outgoing = enriched.find((x) => x.isOutgoing);
+      const waitingOther = enriched.find((x) => x.isWaiting && x.mySaved);
+      const nextConfirmed = confirmedMatches[0];
+
+      let badge = '';
+      let badgeCls = '';
+      let title = '';
+      let desc = '';
+      let actionBtn = '';
+
+      if (incoming) {
+        badge = '📩 Rückmeldung erbeten';
+        badgeCls = 'warn';
+        title = `Euer Gegner ${esc(incoming.opponent)} hat Spieltermine vorgeschlagen!`;
+        desc = `Für „${esc(incoming.ph.name)}“ liegen Terminvorschläge vor. Bitte wähle gemeinsam mit deinem Team einen Termin aus oder schicke einen Gegenvorschlag.`;
+        actionBtn = `<a href="#/player/phase/${incoming.m.phase_id}/match/${incoming.m.id}" class="btn btn-amber btn-lg focus-action-btn">📩 Jetzt Termine ansehen & wählen ›</a>`;
+      } else if (missingMy) {
+        badge = '🗓 Deine Zeiten fehlen';
+        badgeCls = 'warn';
+        title = `Hallo ${esc(me.player.name)}, deine Zeiten für „${esc(missingMy.ph.name)}“ fehlen noch!`;
+        desc = `Damit euer Spiel gegen <b>${esc(missingMy.opponent)}</b> abgestimmt werden kann, trage bitte im Kalender ein, wann du spielen kannst.`;
+        actionBtn = `<a href="#/player/phase/${missingMy.m.phase_id}" class="btn btn-amber btn-lg focus-action-btn">🗓 Jetzt meine freien Zeiten eintragen ›</a>`;
+      } else if (ready) {
+        badge = '🤝 Bereit zur Terminauswahl';
+        badgeCls = 'ready-badge';
+        title = `Alle 6 Spieler haben Zeiten eingetragen für „${esc(ready.ph.name)}“!`;
+        desc = `Alle Verfügbarkeiten sind da. Euer Team (${esc(me.player.team_name || 'Dein Team')}) kann jetzt 1 bis 3 gemeinsame Spieltermine an ${esc(ready.opponent)} senden.`;
+        actionBtn = `<a href="#/player/phase/${ready.m.phase_id}/match/${ready.m.id}" class="btn btn-primary btn-lg focus-action-btn">🤝 Spieltermine vorschlagen ›</a>`;
+      } else if (outgoing) {
+        badge = '⏳ Warten auf Gegner';
+        badgeCls = 'open';
+        title = `Terminvorschlag gesendet – wir warten auf ${esc(outgoing.opponent)}`;
+        desc = `Euer Terminvorschlag für „${esc(outgoing.ph.name)}“ liegt beim gegnerischen Team zur Prüfung. Du musst aktuell nichts weiter tun!`;
+        actionBtn = `<a href="#/player/phase/${outgoing.m.phase_id}/match/${outgoing.m.id}" class="btn btn-blue btn-lg focus-action-btn">🔍 Vorschlag & Status ansehen ›</a>`;
+      } else if (waitingOther) {
+        badge = '⏳ Warten auf Mitspieler & Gegner';
+        badgeCls = 'open';
+        title = `Deine Zeiten sind gespeichert! Wir warten noch auf andere Spieler.`;
+        desc = `Für „${esc(waitingOther.ph.name)}“ hast du deine Zeiten eingetragen. Sobald alle 6 Spieler fertig sind, schlagt ihr Termine vor.`;
+        actionBtn = `<a href="#/player/phase/${waitingOther.m.phase_id}/match/${waitingOther.m.id}" class="btn btn-blue btn-lg focus-action-btn">⚔ Wer fehlt noch? (Status prüfen) ›</a>`;
+      } else if (nextConfirmed) {
+        badge = '🏆 Spieltermin steht fest';
+        badgeCls = 'ok';
+        title = `Euer nächstes Spiel: ${slotLabel(nextConfirmed.m.confirmed_slot)} Uhr!`;
+        desc = `Das Spiel gegen <b>${esc(nextConfirmed.opponent)}</b> in „${esc(nextConfirmed.ph.name)}“ ist verbindlich vereinbart.`;
+        actionBtn = `<a href="#/player/phase/${nextConfirmed.m.phase_id}/match/${nextConfirmed.m.id}" class="btn btn-blue btn-lg focus-action-btn">🏆 Zum Spiel-Abgleich & Details ›</a>`;
+      } else {
+        badge = '✅ Alles erledigt';
+        badgeCls = 'ok';
+        title = `Alles erledigt, ${esc(me.player.name)}!`;
+        desc = `Aktuell gibt es keinen offenen Handlungsbedarf für dich. Du kannst dich entspannt zurücklehnen oder unten deine Kalenderzeiten prüfen.`;
+        actionBtn = `<button type="button" class="btn btn-steel btn-lg focus-action-btn" data-switch-tab="calendar">🗓 Kalenderzeiten ansehen ›</button>`;
+      }
+
+      return `
+        <section class="focus-hero card metal focus-${badgeCls}">
+          <div class="focus-hero-head">
+            <span class="focus-hero-label">👉 Was ist jetzt zu tun?</span>
+            <span class="badge ${badgeCls}">${badge}</span>
+          </div>
+          <div class="focus-hero-body">
+            <h2 class="focus-hero-title">${title}</h2>
+            <p class="focus-hero-desc">${desc}</p>
+            <div class="focus-hero-actions">
+              ${actionBtn}
+            </div>
+          </div>
+        </section>`;
+    };
+
     const renderMatchRow = (item) => {
       const { m, ph, opponent, oppLogo, myLogo, mySaved, propSlots, isConfirmed, isIncoming, isOutgoing, isWaiting } = item;
       let stateCls = 'st-ready';
@@ -689,37 +775,37 @@
           <div class="m-row-status">
             <span class="badge ok">🏆 Fester Termin</span>
             <b class="m-row-slot">${slotLabel(m.confirmed_slot)} Uhr</b>
-            <small class="muted">Bestätigt von ${esc(m.confirmed_by_player_name || '')}</small>
+            <small class="muted">Bestätigt von ${esc(m.confirmed_by_player_name || 'Admin')}</small>
           </div>`;
-        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-blue btn-sm">🏆 Abgleich & Details ›</a>`;
+        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-blue btn-sm">🏆 Details ansehen ›</a>`;
       } else if (isIncoming) {
         stateCls = 'st-incoming';
         statusHTML = `
           <div class="m-row-status">
             <div class="m-row-status-top">
               <span class="badge warn">📩 Vorschlag von ${esc(opponent)}</span>
-              <small class="muted">von ${esc(m.proposed_by_player_name || '')} · bitte bestätigen oder Gegenvorschlag senden:</small>
+              <small class="muted">von ${esc(m.proposed_by_player_name || '')} · bitte Termin auswählen oder Gegenvorschlag senden:</small>
             </div>
             <div class="m-row-chips">${propSlots.map((s) => `<span class="prop-chip">${slotLabel(s)} Uhr</span>`).join('')}</div>
           </div>`;
-        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-amber btn-sm">📩 Vorschlag prüfen ›</a>`;
+        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-amber btn-sm">📩 Termin auswählen ›</a>`;
       } else if (isOutgoing) {
         stateCls = 'st-outgoing';
         statusHTML = `
           <div class="m-row-status">
             <div class="m-row-status-top">
               <span class="badge open">⏳ Wartet auf ${esc(opponent)}</span>
-              <small class="muted">Vorschlag von ${esc(m.proposed_by_player_name || '')}:</small>
+              <small class="muted">Euer Terminvorschlag:</small>
             </div>
             <div class="m-row-chips">${propSlots.map((s) => `<span class="prop-chip subtle">${slotLabel(s)} Uhr</span>`).join('')}</div>
           </div>`;
-        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-blue btn-sm">⏳ Vorschlag ansehen ›</a>`;
+        primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-blue btn-sm">⏳ Status ansehen ›</a>`;
       } else if (isWaiting) {
         stateCls = 'st-waiting';
         statusHTML = `
           <div class="m-row-status">
             <span class="badge warn">⚠️ Zeiten fehlen noch</span>
-            <small class="muted">${!mySaved ? 'Bitte trage zuerst deine eigenen Verfügbarkeiten für diese Phase ein.' : 'Noch nicht alle 6 Spieler haben ihre Zeiten gespeichert.'}</small>
+            <small class="muted">${!mySaved ? 'Bitte trage zuerst deine eigenen freien Zeiten für diese Phase ein.' : 'Noch nicht alle 6 Spieler haben ihre Zeiten gespeichert.'}</small>
           </div>`;
         primaryBtnHTML = !mySaved
           ? `<a href="#/player/phase/${m.phase_id}" class="btn btn-amber btn-sm">🗓 Zeiten eintragen ›</a>`
@@ -728,8 +814,8 @@
         stateCls = 'st-ready';
         statusHTML = `
           <div class="m-row-status">
-            <span class="badge ready-badge">🤝 Bereit zur Einigung</span>
-            <small class="muted">Alle 6 Spieler haben eingetragen – schlagt jetzt 1 bis 3 Termine vor.</small>
+            <span class="badge ready-badge">🤝 Bereit zur Terminauswahl</span>
+            <small class="muted">Alle 6 Spieler haben Zeiten eingetragen – schlagt dem Gegner jetzt Termine vor.</small>
           </div>`;
         primaryBtnHTML = `<a href="#/player/phase/${m.phase_id}/match/${m.id}" class="btn btn-primary btn-sm">🤝 Termine vorschlagen ›</a>`;
       }
@@ -754,125 +840,68 @@
           <div class="m-row-right">
             ${primaryBtnHTML}
             <a href="#/player/phase/${m.phase_id}" class="btn ${mySaved ? 'btn-steel' : 'btn-amber'} btn-xs" title="Eigene Zeiten für diese Phase bearbeiten">
-              🗓 Meine Zeiten ${mySaved ? '✓' : 'offen'}
+              🗓 Meine Zeiten ${mySaved ? '✓' : 'fehlen'}
             </a>
           </div>
         </article>`;
     };
 
     const renderDashboardBody = () => {
-      const flt = S.homeFilter || 'all';
-      const showMatchesSection = flt !== 'times';
-      const showCalendarSection = flt === 'all' || flt === 'times';
+      const activeTab = S.homeMainTab || 'matches';
+      const matchFilter = S.homeMatchFilter || 'all';
 
-      const colorGuideHTML = `
-        <div class="btn-color-guide">
-          <span class="bcg-label">Button-Farben:</span>
-          <span class="bcg-item"><i class="bcg-dot amber"></i><b>Gelb:</b> Reaktion / Zeiten nötig</span>
-          <span class="bcg-item"><i class="bcg-dot green"></i><b>Grün:</b> Termine vorschlagen / bestätigen</span>
-          <span class="bcg-item"><i class="bcg-dot blue"></i><b>Blau:</b> Match-Abgleich & Details</span>
-          <span class="bcg-item"><i class="bcg-dot steel"></i><b>Stahl:</b> Eigene Zeiten & Werkzeuge</span>
-        </div>`;
+      let displayMatches = openMatches;
+      if (matchFilter === 'confirmed') displayMatches = confirmedMatches;
+      else if (matchFilter === 'all') displayMatches = [...openMatches, ...confirmedMatches];
 
-      let matchesContentHTML = '';
-      if (!me.matchups.length) {
-        matchesContentHTML = `
-          <section class="player-matches-hero metal no-match">
-            <div class="pmh-empty">
-              <img src="/logo.png" alt="" class="pmh-empty-crest">
-              <div>
-                <h3>Noch keine Spielpaarung für dein Team</h3>
-                <p class="muted">Sobald der Admin eine Paarung für <b>${esc(me.player.team_name || 'dein Team')}</b> festlegt, erscheint hier der direkte 6-Spieler-Terminabgleich. Trage unten schon einmal deine Zeiten in den Kalendern ein!</p>
-              </div>
+      const matchesSectionHTML = `
+        <section class="dashboard-section">
+          <div class="sec-bar">
+            <div>
+              <h2>⚔ Deine Spiele & Termine</h2>
+              <p class="muted">Hier siehst du alle angesetzten Spiele deines Teams und wie weit die Termin-Abstimmung ist:</p>
             </div>
-          </section>`;
-      } else if (flt === 'action') {
-        matchesContentHTML = `
-          <section class="dashboard-section">
-            <div class="sec-bar">
-              <div>
-                <h2>⚡ Aktion offen (${actionMatches.length})</h2>
-                <p class="muted">Spiele, bei denen deine Rückmeldung, Termin-Auswahl oder Zeiteintragung gefragt ist:</p>
-              </div>
-              <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
+            <div class="sub-filter-pills">
+              <button type="button" class="sub-pill ${matchFilter === 'all' ? 'active' : ''}" data-match-filter="all">Alle (${enriched.length})</button>
+              <button type="button" class="sub-pill ${matchFilter === 'open' ? 'active' : ''}" data-match-filter="open">In Abstimmung (${openMatches.length})</button>
+              <button type="button" class="sub-pill ${matchFilter === 'confirmed' ? 'active' : ''}" data-match-filter="confirmed">Fest vereinbart (${confirmedMatches.length})</button>
             </div>
-            ${actionMatches.length
-              ? `<div class="m-row-list">${actionMatches.map(renderMatchRow).join('')}</div>`
-              : `<div class="card metal filter-empty-state">
-                  <p>🎉 <b>Perfekt!</b> Aktuell gibt es bei keinem deiner Spiele offenen Handlungsbedarf.</p>
-                  <button type="button" class="btn btn-blue btn-sm" data-home-filter="all">📋 Zurück zur Gesamtübersicht</button>
-                </div>`}
-          </section>`;
-      } else if (flt === 'waiting') {
-        matchesContentHTML = `
-          <section class="dashboard-section">
-            <div class="sec-bar">
-              <div>
-                <h2>⏳ Wartet auf andere (${waitingMatches.length})</h2>
-                <p class="muted">Spiele, bei denen euer Vorschlag gesendet wurde oder noch Zeiten anderer Spieler fehlen:</p>
+          </div>
+          ${!enriched.length ? `
+            <section class="player-matches-hero metal no-match">
+              <div class="pmh-empty">
+                <img src="/logo.png" alt="" class="pmh-empty-crest">
+                <div>
+                  <h3>Noch keine Spielpaarung für dein Team</h3>
+                  <p class="muted">Sobald der Admin eine Paarung für <b>${esc(me.player.team_name || 'dein Team')}</b> ansetzt, kannst du hier mit dem gegnerischen Team einen Spieltermin abstimmen.</p>
+                </div>
               </div>
-              <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
-            </div>
-            ${waitingMatches.length
-              ? `<div class="m-row-list">${waitingMatches.map(renderMatchRow).join('')}</div>`
-              : `<div class="card metal filter-empty-state">
-                  <p>Aktuell wartet keines deiner Spiele auf Rückmeldung anderer Spieler.</p>
-                  <button type="button" class="btn btn-blue btn-sm" data-home-filter="all">📋 Zurück zur Gesamtübersicht</button>
-                </div>`}
-          </section>`;
-      } else if (flt === 'confirmed') {
-        matchesContentHTML = `
-          <section class="dashboard-section">
-            <div class="sec-bar">
-              <div>
-                <h2>🏆 Fest terminierte Spiele (${confirmedMatches.length})</h2>
-                <p class="muted">Alle bereits verbindlich vereinbarten Spieltermine deines Teams:</p>
-              </div>
-              <button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>
-            </div>
-            ${confirmedMatches.length
-              ? `<div class="m-row-list">${confirmedMatches.map(renderMatchRow).join('')}</div>`
-              : `<div class="card metal filter-empty-state">
-                  <p>Für dein Team steht aktuell noch kein Spieltermin verbindlich fest.</p>
-                  <button type="button" class="btn btn-amber btn-sm" data-home-filter="action">⚡ Zu den offenen Abstimmungen</button>
-                </div>`}
-          </section>`;
-      } else {
-        matchesContentHTML = `
-          <section class="dashboard-section">
-            <div class="sec-bar">
-              <div>
-                <h2>⚔ Deine Spiele & Termin-Abstimmung</h2>
-                <p class="muted">Alle angesetzten Paarungen deines Teams – sortiert nach Handlungsbedarf:</p>
-              </div>
-            </div>
+            </section>
+          ` : matchFilter === 'all' ? `
             ${openMatches.length ? `
               <div class="m-group">
-                ${confirmedMatches.length ? `<h3 class="m-group-title">Offene Abstimmungen (${openMatches.length})</h3>` : ''}
-                <div class="m-row-list">
-                  ${openMatches.map(renderMatchRow).join('')}
-                </div>
+                <h3 class="m-group-title">⏳ In Termin-Abstimmung (${openMatches.length})</h3>
+                <div class="m-row-list">${openMatches.map(renderMatchRow).join('')}</div>
               </div>` : ''}
             ${confirmedMatches.length ? `
               <div class="m-group">
-                ${openMatches.length ? `<h3 class="m-group-title">Feststehende Spieltermine (${confirmedMatches.length})</h3>` : ''}
-                <div class="m-row-list">
-                  ${confirmedMatches.map(renderMatchRow).join('')}
-                </div>
+                <h3 class="m-group-title">🏆 Fest vereinbarte Spieltermine (${confirmedMatches.length})</h3>
+                <div class="m-row-list">${confirmedMatches.map(renderMatchRow).join('')}</div>
               </div>` : ''}
-          </section>`;
-      }
+          ` : `
+            <div class="m-row-list">${displayMatches.map(renderMatchRow).join('') || '<div class="notice">Keine Spiele in dieser Auswahl.</div>'}</div>
+          `}
+        </section>`;
 
       const calendarSectionHTML = `
         <section class="dashboard-section">
           <div class="sec-bar">
             <div>
-              <h2>🗓 Meine Verfügbarkeiten (Turnierkalender)</h2>
-              <p class="muted">Klicke auf eine Turnierphase, um deine persönlichen Zeiten einzutragen oder anzupassen:</p>
+              <h2>🗓 Dein Verfügbarkeits-Kalender</h2>
+              <p class="muted">Wähle eine Spielwoche aus, um deine freien Zeiten einzutragen oder zu ändern:</p>
             </div>
             <div class="sec-pills">
               <span class="badge ${saved.size === PHASES.length ? 'ok' : saved.size > 0 ? 'warn' : 'open'}">✓ ${saved.size} von ${PHASES.length} Phasen gespeichert</span>
-              ${flt === 'times' ? `<button type="button" class="btn btn-steel btn-xs" data-home-filter="all">📋 Alle Bereiche anzeigen</button>` : ''}
             </div>
           </div>
           <div class="weeks">
@@ -902,7 +931,7 @@
                         <span class="pb-dates">${formatRange(p)}</span>
                         <div class="pb-btn-wrap">
                           <span class="btn ${isSaved ? 'btn-steel' : 'btn-amber'} btn-xs btn-block">
-                            ${isSaved ? '🗓 Zeiten bearbeiten (✓ gespeichert)' : '🗓 Jetzt Zeiten eintragen ›'}
+                            ${isSaved ? '🗓 Zeiten bearbeiten (✓ gespeichert)' : '🗓 Jetzt freie Zeiten eintragen ›'}
                           </span>
                         </div>
                       </div>`;
@@ -913,34 +942,26 @@
         </section>`;
 
       return `
-        <nav class="home-filter-bar metal" aria-label="Übersicht filtern">
-          <span class="hfb-label">Ansicht:</span>
-          <div class="hfb-btns">
-            <button type="button" class="btn btn-sm hfb-btn ${flt === 'all' ? 'btn-blue is-active' : 'btn-steel'}" data-home-filter="all">
-              <span>📋 Alles</span>
-            </button>
-            <button type="button" class="btn btn-sm hfb-btn ${flt === 'action' ? 'btn-amber is-active' : actionMatches.length > 0 ? 'btn-amber' : 'btn-steel'}" data-home-filter="action">
-              <span>⚡ Aktion offen</span>
-              <span class="hfb-cnt">${actionMatches.length}</span>
-            </button>
-            <button type="button" class="btn btn-sm hfb-btn ${flt === 'waiting' ? 'btn-blue is-active' : 'btn-steel'}" data-home-filter="waiting">
-              <span class="hl-long">⏳ Wartet auf andere</span>
-              <span class="hl-short">⏳ Wartet noch</span>
-              <span class="hfb-cnt">${waitingMatches.length}</span>
-            </button>
-            <button type="button" class="btn btn-sm hfb-btn ${flt === 'confirmed' ? 'btn-primary is-active' : 'btn-steel'}" data-home-filter="confirmed">
-              <span>🏆 Fest terminiert</span>
-              <span class="hfb-cnt">${confirmedMatches.length}</span>
-            </button>
-            <button type="button" class="btn btn-sm hfb-btn ${flt === 'times' ? 'btn-blue is-active' : saved.size < PHASES.length ? 'btn-amber' : 'btn-steel'}" data-home-filter="times">
-              <span>🗓 Meine Zeiten</span>
-              <span class="hfb-cnt">${saved.size}/${PHASES.length}</span>
-            </button>
-          </div>
+        ${renderFocusHero()}
+
+        <nav class="main-hub-tabs" aria-label="Hauptbereiche">
+          <button type="button" class="hub-tab ${activeTab === 'matches' ? 'active' : ''}" data-hub-tab="matches">
+            <span class="hub-tab-icon">⚔</span>
+            <div class="hub-tab-txt">
+              <strong>1. Meine Spiele & Termine</strong>
+              <small>${openMatches.length ? `${openMatches.length} Spiel(e) in Abstimmung` : 'Alle Termine geklärt'}</small>
+            </div>
+          </button>
+          <button type="button" class="hub-tab ${activeTab === 'calendar' ? 'active' : ''}" data-hub-tab="calendar">
+            <span class="hub-tab-icon">🗓</span>
+            <div class="hub-tab-txt">
+              <strong>2. Mein Kalender (Zeiten eintragen)</strong>
+              <small>${saved.size} von ${PHASES.length} Phasen gespeichert</small>
+            </div>
+          </button>
         </nav>
-        ${showMatchesSection ? matchesContentHTML : ''}
-        ${showCalendarSection ? calendarSectionHTML : ''}
-        ${colorGuideHTML}
+
+        ${activeTab === 'matches' ? matchesSectionHTML : calendarSectionHTML}
       `;
     };
 
@@ -955,9 +976,21 @@
     const contentBox = document.getElementById('player-home-content');
     const mountHomeContent = () => {
       contentBox.innerHTML = renderDashboardBody();
-      contentBox.querySelectorAll('[data-home-filter]').forEach((btn) => {
+      contentBox.querySelectorAll('[data-hub-tab]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          S.homeFilter = btn.dataset.homeFilter;
+          S.homeMainTab = btn.dataset.hubTab;
+          mountHomeContent();
+        });
+      });
+      contentBox.querySelectorAll('[data-match-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          S.homeMatchFilter = btn.dataset.matchFilter;
+          mountHomeContent();
+        });
+      });
+      contentBox.querySelectorAll('[data-switch-tab]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          S.homeMainTab = btn.dataset.switchTab;
           mountHomeContent();
         });
       });
@@ -1066,13 +1099,49 @@
     for (const c of data.cells) cells.set(key(c.date, c.hour), c.status);
     let savedOnce = data.saved;
 
+    // Phasen ermitteln, die dieser Spieler bereits gespeichert hat (außer der aktuellen):
+    const otherSavedPhases = PHASES.filter(
+      (p) => p.id !== phase.id && me.savedPhases.includes(p.id)
+    );
+    const myPhaseIdx = PHASES.findIndex((p) => p.id === phase.id);
+    const prevSavedPhases = PHASES.slice(0, myPhaseIdx).filter((p) => me.savedPhases.includes(p.id));
+    const defaultSourcePhase = prevSavedPhases.length
+      ? prevSavedPhases[prevSavedPhases.length - 1]
+      : otherSavedPhases[0] || null;
+
+    const copyBarHTML = otherSavedPhases.length ? `
+      <div class="copy-week-bar metal">
+        <div class="cwb-left">
+          <span class="cwb-icon" aria-hidden="true">📋</span>
+          <div class="cwb-txt">
+            <strong>Zeiten aus anderer Woche übernehmen:</strong>
+            <small class="muted">Übernimmt deine freien Wochentage & Uhrzeiten (z. B. Mo–Fr ab 19 Uhr) mit 1 Klick</small>
+          </div>
+        </div>
+        <div class="cwb-actions">
+          <select id="cwb-source-select" class="cwb-select" aria-label="Vorlage-Woche wählen">
+            ${otherSavedPhases.map((sp) => `
+              <option value="${sp.id}" ${sp.id === defaultSourcePhase?.id ? 'selected' : ''}>
+                W${sp.week}: ${esc(sp.name)}${sp.subtitle ? ` (${esc(sp.subtitle)})` : ''}
+              </option>
+            `).join('')}
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" id="cwb-copy-btn">
+            📋 Zeiten jetzt übernehmen
+          </button>
+        </div>
+      </div>` : '';
+
     body.innerHTML = `
+      ${copyBarHTML}
       <div class="cal-toolbar">
         ${legend('edit')}
         <span class="cal-help-inline muted small">💡 Klick/Ziehen = Stunden markieren · Klick auf Tag/Uhrzeit = ganze Spalte/Zeile</span>
         <div class="tool-actions">
-          <button class="btn btn-ghost btn-sm" data-fill="green">Alles grün</button>
-          <button class="btn btn-ghost btn-sm" data-fill="red">Zurücksetzen</button>
+          <button type="button" class="btn btn-steel btn-xs" data-preset="workdays-19" title="Montag bis Freitag von 19:00 bis 23:00 Uhr auf Grün setzen">⚡ Werktags ab 19 Uhr</button>
+          <button type="button" class="btn btn-steel btn-xs" data-preset="evenings-20" title="Montag bis Sonntag von 20:00 bis 23:00 Uhr auf Grün setzen">⚡ Abende ab 20 Uhr</button>
+          <button type="button" class="btn btn-ghost btn-xs" data-fill="green">Alles grün</button>
+          <button type="button" class="btn btn-ghost btn-xs" data-fill="red">Alles rot</button>
         </div>
       </div>
       <div id="editor"></div>
@@ -1105,6 +1174,52 @@
       editor.setAll(b.dataset.fill);
     }));
 
+    body.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => {
+      const p = b.dataset.preset;
+      if (p === 'workdays-19') {
+        editor.applyPreset(({ isWorkday, hour }) => (isWorkday && hour >= 19 && hour <= 22 ? 'green' : null));
+        toast('Montag–Freitag ab 19 Uhr auf Grün gesetzt!');
+      } else if (p === 'evenings-20') {
+        editor.applyPreset(({ hour }) => (hour >= 20 && hour <= 22 ? 'green' : null));
+        toast('Jeden Abend ab 20 Uhr auf Grün gesetzt!');
+      }
+    }));
+
+    // Klick auf "Zeiten von anderer Woche übernehmen":
+    const copyBtn = body.querySelector('#cwb-copy-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const sel = body.querySelector('#cwb-source-select');
+        const sourceId = sel?.value;
+        if (!sourceId) return;
+        const sourcePhase = getPhase(sourceId);
+        copyBtn.disabled = true;
+        copyBtn.textContent = 'Lade Vorlage …';
+        try {
+          const res = await api(`/players/${me.player.id}/availability/${sourceId}`);
+          if (!res.cells || !res.cells.length) {
+            toast('In dieser Vorlage wurden keine Zeiten gefunden.', 'warn');
+            return;
+          }
+          const wMap = new Map();
+          res.cells.forEach((c) => {
+            const wd = new Date(c.date + 'T00:00:00Z').getUTCDay();
+            wMap.set(`${wd}|${c.hour}`, c.status);
+          });
+          editor.applyWeekdayMap(wMap);
+          dirty = true;
+          updateState();
+          toast(`✓ Zeiten aus „${sourcePhase?.name || 'Vorwoche'}“ übernommen! Klicke unten auf „Zeiten speichern“, um sie zu sichern.`);
+          saveBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (err) {
+          toast('Fehler beim Laden der Vorlage: ' + err.message, 'error');
+        } finally {
+          copyBtn.disabled = false;
+          copyBtn.textContent = '📋 Zeiten jetzt übernehmen';
+        }
+      });
+    }
+
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.classList.add('loading');
@@ -1114,6 +1229,7 @@
         await api(`/players/${me.player.id}/availability/${phase.id}`, { method: 'PUT', body: { cells: payload } });
         dirty = false;
         savedOnce = true;
+        if (!me.savedPhases.includes(phase.id)) me.savedPhases.push(phase.id);
         toast(`Zeiten für „${phase.name}${phase.subtitle ? ' – ' + phase.subtitle : ''}“ gespeichert!`);
         saveBtn.querySelector('.btn-label').textContent = '✓ Gespeichert';
         setTimeout(() => { saveBtn.querySelector('.btn-label').textContent = '💾 Zeiten speichern'; }, 1800);
@@ -1209,6 +1325,32 @@
       setAll(status) {
         let changed = false;
         cells.forEach((_, k) => { changed = setCell(k, status) || changed; });
+        if (changed) onChange();
+      },
+      applyWeekdayMap(weekdayMap) {
+        let changed = false;
+        dates.forEach((d) => {
+          const wd = new Date(d + 'T00:00:00Z').getUTCDay();
+          HOURS.forEach((h) => {
+            const k = key(d, h);
+            if (weekdayMap.has(`${wd}|${h}`)) {
+              changed = setCell(k, weekdayMap.get(`${wd}|${h}`)) || changed;
+            }
+          });
+        });
+        if (changed) onChange();
+      },
+      applyPreset(fn) {
+        let changed = false;
+        dates.forEach((d) => {
+          const wd = new Date(d + 'T00:00:00Z').getUTCDay();
+          const isWorkday = wd >= 1 && wd <= 5;
+          HOURS.forEach((h) => {
+            const k = key(d, h);
+            const target = fn({ date: d, weekday: wd, isWorkday, hour: h, current: cells.get(k) });
+            if (target) changed = setCell(k, target) || changed;
+          });
+        });
         if (changed) onChange();
       },
     };
@@ -1979,16 +2121,761 @@
         <button class="btn btn-ghost btn-sm" id="admin-logout">Logout</button>
       </header>
       <main class="container">
+        <div id="admin-search-host"></div>
         <nav class="tabs big">${tabs.map(([id, label]) => `<a class="tab ${id === activeTab ? 'active' : ''}" href="#/admin/${id}">${label}</a>`).join('')}</nav>
         <div id="admin-body"><div class="loading"><div class="spinner"></div></div></div>
       </main>`;
     document.getElementById('admin-logout').addEventListener('click', () => { sessionStorage.removeItem(SS_ADMIN); go('#/'); });
     const body = document.getElementById('admin-body');
-    if (tab === 'teams') await adminTeams(body);
-    else if (tab === 'matchups') await adminMatchups(body);
-    else if (tab === 'insight') await adminInsight(body);
-    else if (tab === 'match') await adminMatch(body, rest[0]);
-    else go('#/admin/teams');
+    const searchHost = document.getElementById('admin-search-host');
+
+    const loadCurrentTab = async () => {
+      if (tab === 'teams') await adminTeams(body);
+      else if (tab === 'matchups') await adminMatchups(body);
+      else if (tab === 'insight') await adminInsight(body);
+      else if (tab === 'match') await adminMatch(body, rest[0]);
+      else go('#/admin/teams');
+    };
+
+    await mountAdminSearch(searchHost, loadCurrentTab);
+    await loadCurrentTab();
+  }
+
+  // ---------- Admin-Freitextsuche (Teams & Spieler mit Vorschlägen & Detail-Dossier) ----------
+  function highlightText(text, query) {
+    const s = String(text ?? '');
+    const q = String(query ?? '').trim();
+    if (!q) return esc(s);
+    const idx = s.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return esc(s);
+    return `${esc(s.slice(0, idx))}<mark class="as-hl">${esc(s.slice(idx, idx + q.length))}</mark>${esc(s.slice(idx + q.length))}`;
+  }
+
+  async function mountAdminSearch(host, onDataMutated) {
+    if (!host) return;
+    let teams = [];
+    let players = [];
+    let matchups = [];
+    let savedSet = new Set();
+    let activeIdx = -1;
+    let currentSuggestions = [];
+    let calReqId = 0;
+
+    const loadSearchData = async () => {
+      const [t, p, m, st] = await Promise.all([
+        api('/teams'),
+        api('/players'),
+        api('/matchups'),
+        api('/admin/save-status'),
+      ]);
+      teams = t;
+      players = p;
+      matchups = m;
+      savedSet = new Set(st.map((s) => `${s.player_id}|${s.phase_id}`));
+    };
+
+    await loadSearchData();
+
+    host.innerHTML = `
+      <section class="admin-search-section metal" aria-label="Team- und Spielersuche">
+        <div class="as-bar">
+          <div class="as-input-wrap">
+            <span class="as-icon" aria-hidden="true">🔍</span>
+            <input
+              type="search"
+              id="admin-omni-input"
+              class="as-input"
+              placeholder="Team oder Spieler suchen (z. B. Foxhunters, Mo, Ballgefühl …) – Vorschlag anklicken für Komplett-Übersicht"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button type="button" class="as-clear-btn" id="admin-omni-clear" hidden title="Eingabe löschen">✕</button>
+          </div>
+          <div class="as-dropdown" id="admin-omni-dropdown" hidden role="listbox"></div>
+        </div>
+        <div id="admin-dossier-wrap"></div>
+      </section>`;
+
+    const input = host.querySelector('#admin-omni-input');
+    const clearBtn = host.querySelector('#admin-omni-clear');
+    const dropdown = host.querySelector('#admin-omni-dropdown');
+    const dossierWrap = host.querySelector('#admin-dossier-wrap');
+
+    const closeDropdown = () => {
+      dropdown.hidden = true;
+      dropdown.innerHTML = '';
+      activeIdx = -1;
+      currentSuggestions = [];
+    };
+
+    const selectTarget = async (target, { scroll = true } = {}) => {
+      S.adminSearchTarget = target;
+      closeDropdown();
+      await loadSearchData();
+      await renderDossier();
+      if (scroll && dossierWrap.firstElementChild) {
+        dossierWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    };
+
+    const updateSuggestions = () => {
+      const q = input.value.trim();
+      clearBtn.hidden = !q && !S.adminSearchTarget;
+      if (q.length < 1) {
+        closeDropdown();
+        return;
+      }
+      const ql = q.toLowerCase();
+
+      // Teams filtern (Name trifft zu ODER ein Spieler im Team trifft zu)
+      const matchedTeams = teams
+        .filter((t) => t.name.toLowerCase().includes(ql) || t.players.some((p) => p.name.toLowerCase().includes(ql)))
+        .sort((a, b) => {
+          const aStarts = a.name.toLowerCase().startsWith(ql) ? 0 : 1;
+          const bStarts = b.name.toLowerCase().startsWith(ql) ? 0 : 1;
+          return aStarts - bStarts || a.name.localeCompare(b.name, 'de');
+        })
+        .slice(0, 8);
+
+      // Spieler filtern (Spielername trifft zu ODER Teamname trifft zu)
+      const matchedPlayers = players
+        .filter((p) => p.name.toLowerCase().includes(ql) || (p.team_name || '').toLowerCase().includes(ql))
+        .sort((a, b) => {
+          const aNameMatch = a.name.toLowerCase().includes(ql) ? 0 : 1;
+          const bNameMatch = b.name.toLowerCase().includes(ql) ? 0 : 1;
+          const aStarts = a.name.toLowerCase().startsWith(ql) ? 0 : 1;
+          const bStarts = b.name.toLowerCase().startsWith(ql) ? 0 : 1;
+          return aNameMatch - bNameMatch || aStarts - bStarts || a.name.localeCompare(b.name, 'de');
+        })
+        .slice(0, 10);
+
+      currentSuggestions = [
+        ...matchedTeams.map((t) => ({ type: 'team', id: t.id, item: t })),
+        ...matchedPlayers.map((p) => ({ type: 'player', id: p.id, item: p })),
+      ];
+      activeIdx = currentSuggestions.length ? 0 : -1;
+
+      if (!currentSuggestions.length) {
+        dropdown.innerHTML = `<div class="as-empty">Kein Team oder Spieler für „<b>${esc(q)}</b>“ gefunden.</div>`;
+        dropdown.hidden = false;
+        return;
+      }
+
+      let idxCounter = 0;
+      const renderTeamSug = (t) => {
+        const myIdx = idxCounter++;
+        const tMatches = matchups.filter((m) => m.team_a_id === t.id || m.team_b_id === t.id);
+        const confCnt = tMatches.filter((m) => m.confirmed_slot).length;
+        const pNames = t.players.map((p) => highlightText(p.name, q)).join(', ') || '<span class="muted">keine Spieler</span>';
+        return `
+          <button type="button" class="as-item ${myIdx === activeIdx ? 'is-active' : ''}" data-sug-idx="${myIdx}" role="option">
+            <div class="as-item-main">
+              ${teamLogoHTML(t.logo, t.name, 'sm')}
+              <div class="as-item-txt">
+                <div class="as-item-title">
+                  <span class="as-type-tag team">🛡️ Team</span>
+                  <b>${highlightText(t.name, q)}</b>
+                  <span class="badge ${t.players.length === 3 ? 'ok' : 'warn'} sm">${t.players.length}/3 Spieler</span>
+                  ${tMatches.length ? `<span class="badge vs sm">⚔ ${tMatches.length} Spiele (${confCnt} fest)</span>` : ''}
+                </div>
+                <small class="as-item-sub">Kader: ${pNames}</small>
+              </div>
+            </div>
+            <span class="as-open-hint">Team-Übersicht öffnen ›</span>
+          </button>`;
+      };
+
+      const renderPlayerSug = (p) => {
+        const myIdx = idxCounter++;
+        const savedCnt = PHASES.filter((ph) => savedSet.has(`${p.id}|${ph.id}`)).length;
+        return `
+          <button type="button" class="as-item ${myIdx === activeIdx ? 'is-active' : ''}" data-sug-idx="${myIdx}" role="option">
+            <div class="as-item-main">
+              ${p.team_name ? teamLogoHTML(p.team_logo, p.team_name, 'sm') : `<span class="avatar sm">${esc(p.name.slice(0, 1).toUpperCase())}</span>`}
+              <div class="as-item-txt">
+                <div class="as-item-title">
+                  <span class="as-type-tag player">👤 Spieler</span>
+                  <b>${highlightText(p.name, q)}</b>
+                  <span class="badge ${savedCnt === PHASES.length ? 'ok' : savedCnt > 0 ? 'warn' : 'open'} sm">🗓 ${savedCnt}/${PHASES.length} Phasen</span>
+                </div>
+                <small class="as-item-sub">Team: ${p.team_name ? highlightText(p.team_name, q) : '<em>Ohne Team</em>'}</small>
+              </div>
+            </div>
+            <span class="as-open-hint">Spieler-Übersicht öffnen ›</span>
+          </button>`;
+      };
+
+      dropdown.innerHTML = `
+        ${matchedTeams.length ? `<div class="as-group-label">🛡️ Teams (${matchedTeams.length}) – anklicken für Team-Dossier</div>${matchedTeams.map(renderTeamSug).join('')}` : ''}
+        ${matchedPlayers.length ? `<div class="as-group-label">👤 Spieler (${matchedPlayers.length}) – anklicken für Spieler-Dossier</div>${matchedPlayers.map(renderPlayerSug).join('')}` : ''}
+      `;
+      dropdown.hidden = false;
+
+      dropdown.querySelectorAll('[data-sug-idx]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const chosen = currentSuggestions[Number(btn.dataset.sugIdx)];
+          if (chosen) {
+            input.value = chosen.item.name;
+            clearBtn.hidden = false;
+            selectTarget({ type: chosen.type, id: chosen.id });
+          }
+        });
+      });
+    };
+
+    const syncActiveItemUI = () => {
+      dropdown.querySelectorAll('[data-sug-idx]').forEach((btn) => {
+        const isAct = Number(btn.dataset.sugIdx) === activeIdx;
+        btn.classList.toggle('is-active', isAct);
+        if (isAct) btn.scrollIntoView({ block: 'nearest' });
+      });
+    };
+
+    input.addEventListener('input', () => {
+      const val = input.value.trim();
+      if (!val) {
+        closeDropdown();
+        return;
+      }
+      // Sofort ab dem 1. getippten Buchstaben Vorschläge zeigen (oder Fokus)
+      updateSuggestions();
+    });
+
+    input.addEventListener('focus', () => {
+      if (input.value.trim().length >= 1) updateSuggestions();
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (dropdown.hidden || !currentSuggestions.length) {
+        if (e.key === 'Escape') closeDropdown();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = (activeIdx + 1) % currentSuggestions.length;
+        syncActiveItemUI();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = (activeIdx - 1 + currentSuggestions.length) % currentSuggestions.length;
+        syncActiveItemUI();
+      } else if (e.key === 'Enter') {
+        if (activeIdx >= 0 && currentSuggestions[activeIdx]) {
+          e.preventDefault();
+          const chosen = currentSuggestions[activeIdx];
+          input.value = chosen.item.name;
+          clearBtn.hidden = false;
+          selectTarget({ type: chosen.type, id: chosen.id });
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeDropdown();
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      S.adminSearchTarget = null;
+      clearBtn.hidden = true;
+      closeDropdown();
+      dossierWrap.innerHTML = '';
+      input.focus();
+    });
+
+    const onDocClick = (e) => {
+      if (!e.target.closest('.as-bar')) closeDropdown();
+    };
+    document.addEventListener('click', onDocClick);
+    onCleanup(() => document.removeEventListener('click', onDocClick));
+
+    // ---------- Hilfsfunktion: Matchup-Analyse für Team oder Spieler ----------
+    const analyzeMatchup = (m, perspectiveTeamId) => {
+      const ph = getPhase(m.phase_id);
+      const isA = m.team_a_id === perspectiveTeamId;
+      const ownTeamId = isA ? m.team_a_id : m.team_b_id;
+      const oppTeamId = isA ? m.team_b_id : m.team_a_id;
+      const ownTeamObj = teams.find((t) => t.id === ownTeamId);
+      const oppTeamObj = teams.find((t) => t.id === oppTeamId);
+      const ownPlayers = ownTeamObj ? ownTeamObj.players : [];
+      const oppPlayers = oppTeamObj ? oppTeamObj.players : [];
+      const all6 = [...ownPlayers, ...oppPlayers];
+      const saved6 = all6.filter((p) => savedSet.has(`${p.id}|${m.phase_id}`));
+      const missingOwn = ownPlayers.filter((p) => !savedSet.has(`${p.id}|${m.phase_id}`));
+      const missingOpp = oppPlayers.filter((p) => !savedSet.has(`${p.id}|${m.phase_id}`));
+      const propSlots = Array.isArray(m.proposed_slots) ? m.proposed_slots : [];
+
+      let category = 'waiting_times';
+      let prio = 3;
+      if (m.confirmed_slot) {
+        category = 'confirmed';
+        prio = 4;
+      } else if (propSlots.length > 0) {
+        category = m.proposed_by_team_id === ownTeamId ? 'proposed_by_us' : 'proposed_by_opp';
+        prio = m.proposed_by_team_id === ownTeamId ? 2 : 1;
+      } else if (all6.length > 0 && saved6.length === all6.length) {
+        category = 'ready';
+        prio = 2;
+      }
+
+      return {
+        m,
+        ph,
+        ownTeamId,
+        oppTeamId,
+        ownName: isA ? m.team_a_name : m.team_b_name,
+        ownLogo: isA ? m.team_a_logo : m.team_b_logo,
+        oppName: isA ? m.team_b_name : m.team_a_name,
+        oppLogo: isA ? m.team_b_logo : m.team_a_logo,
+        ownPlayers,
+        oppPlayers,
+        all6,
+        saved6,
+        missingOwn,
+        missingOpp,
+        propSlots,
+        category,
+        prio,
+      };
+    };
+
+    const renderMatchCardHTML = (info, highlightPlayerId = null) => {
+      const { m, ph, ownTeamId, oppTeamId, ownName, ownLogo, oppName, oppLogo, all6, saved6, missingOwn, missingOpp, propSlots, category } = info;
+      const propByOwn = m.proposed_by_team_id === ownTeamId;
+      const propTeamName = m.proposed_by_team_id === m.team_a_id ? m.team_a_name : m.team_b_name;
+      const waitingTeamName = m.proposed_by_team_id === m.team_a_id ? m.team_b_name : m.team_a_name;
+
+      let statusHTML = '';
+      if (category === 'confirmed') {
+        statusHTML = `
+          <div class="ad-m-status">
+            <div class="ad-m-top">
+              <span class="badge ok">🏆 Fest terminiert</span>
+              <strong class="ad-m-slot">${slotLabel(m.confirmed_slot)} Uhr</strong>
+            </div>
+            <small class="muted">Verbindlich bestätigt${m.confirmed_by_player_name ? ` von <b>${esc(m.confirmed_by_player_name)}</b>` : ''}</small>
+          </div>`;
+      } else if (category === 'proposed_by_opp' || category === 'proposed_by_us') {
+        statusHTML = `
+          <div class="ad-m-status">
+            <div class="ad-m-top">
+              <span class="badge warn">📩 ${propSlots.length} Terminvorschläge offen</span>
+              <small class="muted">Vorschlag von <b>${esc(m.proposed_by_player_name || propTeamName)}</b> (${esc(propTeamName)}) → <b>wartet auf ${esc(waitingTeamName)}</b></small>
+            </div>
+            <div class="m-row-chips">${propSlots.map((s) => `<span class="prop-chip">${slotLabel(s)} Uhr</span>`).join('')}</div>
+          </div>`;
+      } else if (category === 'ready') {
+        statusHTML = `
+          <div class="ad-m-status">
+            <div class="ad-m-top">
+              <span class="badge ready-badge">🤝 Alle ${saved6.length}/${all6.length} Spieler haben Zeiten eingetragen</span>
+            </div>
+            <small class="muted">Beide Teams sind vollständig eingetragen – Terminvorschlag kann jederzeit gesendet werden.</small>
+          </div>`;
+      } else {
+        const missOwnLinks = missingOwn.map((p) => `<button type="button" class="ad-inline-link ${p.id === highlightPlayerId ? 'is-me-warn' : ''}" data-ad-open-player="${p.id}" data-ad-phase="${ph?.id || ''}">👤 ${esc(p.name)}</button>`).join(', ');
+        const missOppLinks = missingOpp.map((p) => `<button type="button" class="ad-inline-link" data-ad-open-player="${p.id}" data-ad-phase="${ph?.id || ''}">👤 ${esc(p.name)}</button>`).join(', ');
+        statusHTML = `
+          <div class="ad-m-status">
+            <div class="ad-m-top">
+              <span class="badge open">⏳ Wartet auf Zeiten (${saved6.length}/${all6.length} Spieler eingetragen)</span>
+            </div>
+            <div class="ad-missing-box">
+              ${missingOwn.length ? `<div><span class="t-yellow">Es fehlen (${esc(ownName)}):</span> ${missOwnLinks}</div>` : `<div class="t-green">✓ ${esc(ownName)} komplett (3/3)</div>`}
+              ${missingOpp.length ? `<div><span class="muted">Es fehlen (${esc(oppName)}):</span> ${missOppLinks}</div>` : `<div class="t-green">✓ ${esc(oppName)} komplett (3/3)</div>`}
+            </div>
+          </div>`;
+      }
+
+      let playerPersonalTag = '';
+      if (highlightPlayerId && ph) {
+        const pSaved = savedSet.has(`${highlightPlayerId}|${ph.id}`);
+        playerPersonalTag = pSaved
+          ? `<span class="badge ok sm">✓ Spieler-Zeiten für ${esc(ph.short)} gespeichert</span>`
+          : `<span class="badge warn sm">⚠ Spieler hat für ${esc(ph.short)} noch KEINE Zeiten gespeichert!</span>`;
+      }
+
+      return `
+        <article class="ad-match-card c-${ph?.color || 'group'} ${category === 'confirmed' ? 'is-conf' : category === 'proposed_by_opp' ? 'is-inc' : ''}">
+          <div class="ad-m-left">
+            <div class="m-row-phase">
+              <i class="dot"></i>
+              <span>Woche ${ph?.week || '?'} · ${esc(ph?.name || m.phase_id)}${ph?.subtitle ? ` (${esc(ph.subtitle)})` : ''}</span>
+              ${ph ? `<small>${formatRange(ph)}</small>` : ''}
+            </div>
+            <div class="ad-m-teams">
+              <span class="m-team-entry m-team-mine">${teamLogoHTML(ownLogo, ownName, 'sm')}<span>${esc(ownName)}</span></span>
+              <span class="m-vs">vs.</span>
+              <button type="button" class="ad-opp-btn" data-ad-open-team="${oppTeamId}" title="Zur Team-Übersicht von ${esc(oppName)} wechseln">
+                ${teamLogoHTML(oppLogo, oppName, 'sm')}
+                <span>${esc(oppName)}</span>
+                <small>🔍</small>
+              </button>
+            </div>
+            ${playerPersonalTag ? `<div class="ad-p-personal">${playerPersonalTag}</div>` : ''}
+          </div>
+          <div class="ad-m-center">
+            ${statusHTML}
+          </div>
+          <div class="ad-m-right">
+            <a class="btn btn-sm btn-blue" href="#/admin/match/${m.id}">📊 6-Spieler-Abgleich & Termin</a>
+            ${m.confirmed_slot || propSlots.length
+              ? `<button type="button" class="btn btn-xs btn-steel" data-ad-reset-match="${m.id}" data-ad-match-label="${esc(ownName)} vs. ${esc(oppName)}">🔓 Termin-Einigung zurücksetzen</button>`
+              : ''}
+          </div>
+        </article>`;
+    };
+
+    // ---------- Dossier Rendern (Team oder Spieler) ----------
+    const renderDossier = async () => {
+      const target = S.adminSearchTarget;
+      clearBtn.hidden = !input.value.trim() && !target;
+      if (!target) {
+        dossierWrap.innerHTML = '';
+        return;
+      }
+
+      if (target.type === 'team') {
+        const team = teams.find((t) => String(t.id) === String(target.id));
+        if (!team) {
+          S.adminSearchTarget = null;
+          dossierWrap.innerHTML = '';
+          return;
+        }
+        const teamMatchups = matchups
+          .filter((m) => m.team_a_id === team.id || m.team_b_id === team.id)
+          .map((m) => analyzeMatchup(m, team.id))
+          .sort((a, b) => a.prio - b.prio || (a.ph?.week || 0) - (b.ph?.week || 0));
+
+        const confCnt = teamMatchups.filter((x) => x.category === 'confirmed').length;
+        const propCnt = teamMatchups.filter((x) => x.category === 'proposed_by_opp' || x.category === 'proposed_by_us').length;
+        const openCnt = teamMatchups.length - confCnt;
+        const totalPossiblePhases = team.players.length * PHASES.length;
+        const totalSavedPhases = team.players.reduce(
+          (acc, p) => acc + PHASES.filter((ph) => savedSet.has(`${p.id}|${ph.id}`)).length,
+          0
+        );
+        const activePhaseIds = new Set(teamMatchups.map((x) => x.m.phase_id));
+
+        dossierWrap.innerHTML = `
+          <div class="admin-dossier card metal">
+            <header class="ad-head">
+              <div class="ad-head-main">
+                <button type="button" class="team-logo-trigger" data-ad-act="logo-team" title="Team-Logo ändern">
+                  ${teamLogoHTML(team.logo, team.name, 'lg')}
+                  <span class="tlt-badge">🖼</span>
+                </button>
+                <div class="ad-head-titles">
+                  <div class="ad-overline">🛡️ TEAM-DOSSIER & KOMPLETT-ÜBERSICHT</div>
+                  <h2>${esc(team.name)}</h2>
+                  <div class="ad-kpis">
+                    <span class="badge ${team.players.length === 3 ? 'ok' : 'warn'}">👥 ${team.players.length}/3 Spieler</span>
+                    <span class="badge vs">⚔ ${teamMatchups.length} Paarungen</span>
+                    <span class="badge ${confCnt ? 'ok' : 'open'}">🏆 ${confCnt} fest terminiert</span>
+                    ${propCnt ? `<span class="badge warn">📩 ${propCnt} Vorschlag aktiv</span>` : ''}
+                    ${openCnt ? `<span class="badge open">⏳ ${openCnt} noch offen</span>` : ''}
+                    <span class="badge ${totalSavedPhases === totalPossiblePhases && totalPossiblePhases > 0 ? 'ok' : 'vs'}">🗓 ${totalSavedPhases}/${totalPossiblePhases} Team-Phasen eingetragen</span>
+                  </div>
+                </div>
+              </div>
+              <div class="ad-head-actions">
+                <button type="button" class="btn btn-sm btn-blue" data-ad-act="logo-team">🖼 Logo ändern</button>
+                <button type="button" class="btn btn-sm btn-steel" data-ad-act="rename-team">✎ Umbenennen</button>
+                <button type="button" class="btn btn-sm btn-ghost" data-ad-act="close">✕ Übersicht schließen</button>
+              </div>
+            </header>
+
+            <section class="ad-sec">
+              <div class="ad-sec-head">
+                <h3>👥 Team-Kader & Eingetragene Phasen pro Spieler (${team.players.length}/3)</h3>
+                <span class="muted small">Klicke auf einen Spieler oder eine Phase, um seinen persönlichen Verfügbarkeits-Kalender zu öffnen</span>
+              </div>
+              ${team.players.length ? `
+                <div class="ad-roster-grid">
+                  ${team.players.map((p) => {
+                    const pSavedCnt = PHASES.filter((ph) => savedSet.has(`${p.id}|${ph.id}`)).length;
+                    return `
+                      <div class="ad-player-card">
+                        <div class="ad-pc-top">
+                          <div>
+                            <strong class="ad-pc-name">👤 ${esc(p.name)}</strong>
+                            <small class="muted">Spieler in ${esc(team.name)}</small>
+                          </div>
+                          <span class="badge ${pSavedCnt === PHASES.length ? 'ok' : pSavedCnt > 0 ? 'warn' : 'open'} sm">${pSavedCnt}/${PHASES.length} Phasen</span>
+                        </div>
+                        <div class="ad-pc-phases">
+                          ${PHASES.map((ph) => {
+                            const hasSaved = savedSet.has(`${p.id}|${ph.id}`);
+                            const hasMatch = activePhaseIds.has(ph.id);
+                            return `
+                              <button
+                                type="button"
+                                class="ad-ph-pill ${hasSaved ? 'is-ok' : hasMatch ? 'is-warn' : 'is-open'}"
+                                data-ad-open-player="${p.id}"
+                                data-ad-phase="${ph.id}"
+                                title="${esc(p.name)} · ${esc(ph.name)}: ${hasSaved ? 'Gespeichert (Klicken für Kalender)' : 'Noch nicht eingetragen'}"
+                              >
+                                <span>${esc(ph.short)}</span>
+                                <b>${hasSaved ? '✓' : hasMatch ? '!' : '·'}</b>
+                              </button>`;
+                          }).join('')}
+                        </div>
+                        <div class="ad-pc-foot">
+                          <button type="button" class="btn btn-xs btn-blue btn-block" data-ad-open-player="${p.id}">
+                            🔍 Spieler-Dossier & Zeiten von ${esc(p.name)} öffnen ›
+                          </button>
+                        </div>
+                      </div>`;
+                  }).join('')}
+                </div>` : '<div class="notice warn">Diesem Team sind aktuell noch keine Spieler zugewiesen.</div>'}
+            </section>
+
+            <section class="ad-sec">
+              <div class="ad-sec-head">
+                <h3>⚔ Alle Paarungen, Gegner & Termin-Status (${teamMatchups.length})</h3>
+                <span class="muted small">Direkter Überblick über vereinbarte Zeiten, offene Vorschläge und fehlende Spieler-Eintragungen</span>
+              </div>
+              ${teamMatchups.length
+                ? `<div class="ad-match-list">${teamMatchups.map((info) => renderMatchCardHTML(info)).join('')}</div>`
+                : `<div class="notice">Für <b>${esc(team.name)}</b> sind aktuell noch keine Paarungen angelegt.</div>`}
+            </section>
+          </div>`;
+
+        bindDossierEvents({ team });
+        return;
+      }
+
+      if (target.type === 'player') {
+        const player = players.find((p) => String(p.id) === String(target.id));
+        if (!player) {
+          S.adminSearchTarget = null;
+          dossierWrap.innerHTML = '';
+          return;
+        }
+        const team = teams.find((t) => t.id === player.team_id) || null;
+        const mates = team ? team.players.filter((x) => x.id !== player.id) : [];
+        const savedPhases = PHASES.filter((ph) => savedSet.has(`${player.id}|${ph.id}`));
+        const playerMatchups = team
+          ? matchups
+              .filter((m) => m.team_a_id === team.id || m.team_b_id === team.id)
+              .map((m) => analyzeMatchup(m, team.id))
+              .sort((a, b) => a.prio - b.prio || (a.ph?.week || 0) - (b.ph?.week || 0))
+          : [];
+        const activePhaseIds = new Set(playerMatchups.map((x) => x.m.phase_id));
+        const missingMatchPhases = playerMatchups.filter((x) => x.category !== 'confirmed' && !savedSet.has(`${player.id}|${x.m.phase_id}`));
+
+        const chosenPhaseId = target.phaseId
+          || (PHASES.find((ph) => activePhaseIds.has(ph.id) && savedSet.has(`${player.id}|${ph.id}`))?.id)
+          || savedPhases[0]?.id
+          || PHASES[0].id;
+        const activePhase = getPhase(chosenPhaseId) || PHASES[0];
+
+        dossierWrap.innerHTML = `
+          <div class="admin-dossier card metal">
+            <header class="ad-head">
+              <div class="ad-head-main">
+                ${team ? teamLogoHTML(team.logo, team.name, 'lg') : `<span class="avatar" style="width:52px;height:52px;font-size:1.3rem">${esc(player.name.slice(0, 1).toUpperCase())}</span>`}
+                <div class="ad-head-titles">
+                  <div class="ad-overline">👤 SPIELER-DOSSIER & ZEITPLAN-EINSICHT</div>
+                  <h2>${esc(player.name)}</h2>
+                  <div class="ad-kpis">
+                    ${team
+                      ? `<button type="button" class="ad-team-chip" data-ad-open-team="${team.id}" title="Zur Team-Übersicht von ${esc(team.name)} wechseln">
+                          ${teamLogoHTML(team.logo, team.name, 'xs')}
+                          <span>Team: <b>${esc(team.name)}</b> (Team öffnen ›)</span>
+                        </button>`
+                      : '<span class="badge warn">Ohne Team</span>'}
+                    <span class="badge ${savedPhases.length === PHASES.length ? 'ok' : savedPhases.length > 0 ? 'warn' : 'open'}">🗓 ${savedPhases.length}/${PHASES.length} Phasen gespeichert</span>
+                    <span class="badge vs">⚔ ${playerMatchups.length} Team-Spiele</span>
+                    ${missingMatchPhases.length
+                      ? `<span class="badge warn">⚠ Bei ${missingMatchPhases.length} offenem Spiel fehlen noch Zeiten von ${esc(player.name)}</span>`
+                      : playerMatchups.length
+                        ? `<span class="badge ok">✓ Alle Match-Phasen eingetragen</span>`
+                        : ''}
+                  </div>
+                  ${mates.length ? `
+                    <div class="ad-mates-row">
+                      <span class="muted small">Mitspieler in ${esc(team.name)}:</span>
+                      ${mates.map((m) => {
+                        const mSaved = PHASES.filter((ph) => savedSet.has(`${m.id}|${ph.id}`)).length;
+                        return `<button type="button" class="ad-mate-btn" data-ad-open-player="${m.id}">👤 ${esc(m.name)} <small>(${mSaved}/${PHASES.length})</small></button>`;
+                      }).join('')}
+                    </div>` : ''}
+                </div>
+              </div>
+              <div class="ad-head-actions">
+                ${team ? `<button type="button" class="btn btn-sm btn-blue" data-ad-open-team="${team.id}">🛡️ Zum Team „${esc(team.name)}“</button>` : ''}
+                <button type="button" class="btn btn-sm btn-steel" data-ad-act="rename-player">✎ Umbenennen</button>
+                <button type="button" class="btn btn-sm btn-ghost" data-ad-act="close">✕ Übersicht schließen</button>
+              </div>
+            </header>
+
+            <section class="ad-sec">
+              <div class="ad-sec-head">
+                <h3>⚔ Spiele & Abstimmungs-Status für ${esc(player.name)} (${playerMatchups.length})</h3>
+                <span class="muted small">Zeigt für jedes Team-Spiel sofort, ob ${esc(player.name)} seine Zeiten bereits eingetragen hat und wie der Termin-Stand ist</span>
+              </div>
+              ${playerMatchups.length
+                ? `<div class="ad-match-list">${playerMatchups.map((info) => renderMatchCardHTML(info, player.id)).join('')}</div>`
+                : `<div class="notice">Für ${team ? `das Team <b>${esc(team.name)}</b>` : `<b>${esc(player.name)}</b>`} sind aktuell noch keine Paarungen angesetzt.</div>`}
+            </section>
+
+            <section class="ad-sec">
+              <div class="ad-sec-head">
+                <h3>🗓 Eingetragene Verfügbarkeiten von ${esc(player.name)} (${savedPhases.length}/${PHASES.length} Phasen)</h3>
+                <span class="muted small">Wähle eine Turnierphase, um den kompletten Stunden-Kalender von ${esc(player.name)} einzusehen</span>
+              </div>
+              <div class="phase-chips">
+                ${PHASES.map((ph) => {
+                  const isSaved = savedSet.has(`${player.id}|${ph.id}`);
+                  const hasMatch = activePhaseIds.has(ph.id);
+                  return `
+                    <button type="button" class="chip c-${ph.color} ${ph.id === activePhase.id ? 'active' : ''}" data-ad-cal-phase="${ph.id}">
+                      <i class="dot"></i>
+                      <span>W${ph.week} · ${esc(ph.short)}</span>
+                      ${hasMatch ? '<span title="Team hat ein Spiel in dieser Phase">⚔</span>' : ''}
+                      ${isSaved ? '<span class="ok-mark">✓</span>' : '<small class="muted">(offen)</small>'}
+                    </button>`;
+                }).join('')}
+              </div>
+              <div id="ad-player-cal-box"><div class="loading"><div class="spinner"></div></div></div>
+            </section>
+          </div>`;
+
+        bindDossierEvents({ player, team });
+
+        // Kalender für activePhase laden
+        const myReq = ++calReqId;
+        const calBox = dossierWrap.querySelector('#ad-player-cal-box');
+        try {
+          const data = await api(`/players/${player.id}/availability/${activePhase.id}`);
+          if (myReq !== calReqId || !calBox) return;
+          const cells = new Map(data.cells.map((c) => [key(c.date, c.hour), c.status]));
+          const cnt = { green: 0, yellow: 0, red: 0 };
+          if (data.saved) data.cells.forEach((x) => cnt[x.status]++);
+          calBox.innerHTML = `
+            <div class="cal-toolbar" style="margin-top:10px">
+              ${legend('edit')}
+              ${data.saved
+                ? `<div class="save-state"><span class="cnt g">${cnt.green} grün</span><span class="cnt y">${cnt.yellow} gelb</span><span class="cnt r">${cnt.red} rot</span></div>`
+                : ''}
+            </div>
+            ${data.saved
+              ? ''
+              : `<div class="notice warn" style="margin-bottom:10px"><b>${esc(player.name)}</b> hat für „${esc(activePhase.name)}${activePhase.subtitle ? ' – ' + esc(activePhase.subtitle) : ''}“ (${formatRange(activePhase)}) noch keine Zeiten gespeichert.</div>`}
+            <div class="ro-grid ${data.saved ? '' : 'unsaved'}"></div>`;
+          mountReadonlyGrid(calBox.querySelector('.ro-grid'), activePhase, cells);
+        } catch (err) {
+          if (calBox) calBox.innerHTML = `<div class="notice warn">${esc(err.message)}</div>`;
+        }
+      }
+    };
+
+    const bindDossierEvents = ({ team = null, player = null }) => {
+      dossierWrap.querySelector('[data-ad-act="close"]')?.addEventListener('click', () => {
+        S.adminSearchTarget = null;
+        dossierWrap.innerHTML = '';
+        clearBtn.hidden = !input.value.trim();
+      });
+
+      dossierWrap.querySelectorAll('[data-ad-act="logo-team"]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!team) return;
+          await openTeamLogoModal(team, teams, async () => {
+            await loadSearchData();
+            await renderDossier();
+            if (onDataMutated) await onDataMutated();
+          });
+        });
+      });
+
+      dossierWrap.querySelector('[data-ad-act="rename-team"]')?.addEventListener('click', async () => {
+        if (!team) return;
+        const ok = await promptModal('Team umbenennen', 'Teamname', team.name, (name) =>
+          api(`/teams/${team.id}`, { method: 'PUT', body: { name } })
+        );
+        if (ok) {
+          toast('Team umbenannt');
+          await loadSearchData();
+          const updated = teams.find((t) => t.id === team.id);
+          if (updated) input.value = updated.name;
+          await renderDossier();
+          if (onDataMutated) await onDataMutated();
+        }
+      });
+
+      dossierWrap.querySelector('[data-ad-act="rename-player"]')?.addEventListener('click', async () => {
+        if (!player) return;
+        const ok = await promptModal('Spieler umbenennen', 'Spielername', player.name, (name) =>
+          api(`/players/${player.id}`, { method: 'PUT', body: { name } })
+        );
+        if (ok) {
+          toast('Spieler umbenannt');
+          await loadSearchData();
+          const updated = players.find((p) => p.id === player.id);
+          if (updated) input.value = updated.name;
+          await renderDossier();
+          if (onDataMutated) await onDataMutated();
+        }
+      });
+
+      dossierWrap.querySelectorAll('[data-ad-open-player]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const pid = Number(btn.dataset.adOpenPlayer);
+          const phId = btn.dataset.adPhase || null;
+          const pObj = players.find((x) => x.id === pid);
+          if (pObj) input.value = pObj.name;
+          selectTarget({ type: 'player', id: pid, phaseId: phId });
+        });
+      });
+
+      dossierWrap.querySelectorAll('[data-ad-open-team]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tid = Number(btn.dataset.adOpenTeam);
+          const tObj = teams.find((x) => x.id === tid);
+          if (tObj) input.value = tObj.name;
+          selectTarget({ type: 'team', id: tid });
+        });
+      });
+
+      dossierWrap.querySelectorAll('[data-ad-cal-phase]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!S.adminSearchTarget) return;
+          S.adminSearchTarget.phaseId = btn.dataset.adCalPhase;
+          renderDossier();
+        });
+      });
+
+      dossierWrap.querySelectorAll('[data-ad-reset-match]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const mid = Number(btn.dataset.adResetMatch);
+          const label = btn.dataset.adMatchLabel || 'dieser Paarung';
+          const ok = await confirmModal(
+            'Termin-Einigung zurücksetzen?',
+            `Der feste Termin bzw. Vorschlag für <b>${esc(label)}</b> wird aufgehoben, sodass sich die Teams neu einigen können.`,
+            'Zurücksetzen'
+          );
+          if (!ok) return;
+          try {
+            await api(`/matchups/${mid}/schedule`, { method: 'PUT', body: { action: 'reset' } });
+            toast('Termin-Einigung wurde zurückgesetzt.');
+            await loadSearchData();
+            await renderDossier();
+            if (onDataMutated) await onDataMutated();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        });
+      });
+    };
+
+    // Falls bereits ein Suchziel aus dem vorherigen Tab-Wechsel aktiv war, wiederherstellen:
+    if (S.adminSearchTarget) {
+      const t = S.adminSearchTarget;
+      const obj = t.type === 'team'
+        ? teams.find((x) => String(x.id) === String(t.id))
+        : players.find((x) => String(x.id) === String(t.id));
+      if (obj) input.value = obj.name;
+      await renderDossier();
+    }
   }
 
   // ---------- Team-Logo Auswahl & Upload Modal (Admin) ----------
