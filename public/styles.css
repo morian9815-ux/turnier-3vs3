@@ -3503,10 +3503,41 @@ input:disabled { opacity: 0.45; }
   }
   .weeks { grid-template-columns: 1fr; }
   .crest-img { width: 120px; }
-  .topbar { flex-wrap: wrap; gap: 10px; padding: 10px 12px; position: static; }
+  .topbar { flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px; position: static; }
   .topbar .brand-text { display: none; }
+  .topbar .brand-link { flex-shrink: 0; }
   .who { justify-content: flex-start; gap: 10px; order: 3; flex-basis: 100%; }
-  .topbar-actions, .topbar #logout-btn, .topbar #admin-logout { margin-left: auto; }
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .notif-top-btn {
+    padding: 5px 9px;
+    gap: 5px;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+  .notif-btn-text {
+    font-size: 0.78rem;
+    display: inline !important;
+  }
+  .notif-bell {
+    font-size: 0.95rem;
+  }
+  .notif-red-badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    font-size: 0.72rem;
+  }
+  .topbar #logout-btn, .topbar #admin-logout {
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    min-height: 30px;
+  }
   .pv-head {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -3678,9 +3709,6 @@ input:disabled { opacity: 0.45; }
   .pb-btns { width: 100%; }
   .pb-btns .btn { width: 100%; white-space: normal; }
   .slot-pick { width: 100%; justify-content: flex-start; white-space: normal; }
-}
-@media (max-width: 440px) {
-  .pv-head .notif-btn-text { display: none; }
 }
 @media (max-width: 350px) {
   .nsb-actions { grid-template-columns: 1fr; }
