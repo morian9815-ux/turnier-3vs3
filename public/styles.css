@@ -3705,6 +3705,17 @@ input:disabled { opacity: 0.45; }
   .tip-teams { grid-template-columns: 1fr; }
   .field.inline select { min-width: 0; width: 100%; }
   .sched-card { padding: 14px 12px; }
+  .sched-footer-actions { width: 100%; }
+  .sched-footer-actions .btn {
+    width: 100%;
+    white-space: normal;
+    text-align: center;
+    padding: 8px 12px;
+    height: auto;
+    min-height: 38px;
+    line-height: 1.35;
+  }
+  .sched-top #edit-propose-btn { width: 100%; white-space: normal; text-align: center; }
   .propose-bar { flex-direction: column; align-items: stretch; }
   .pb-btns { width: 100%; }
   .pb-btns .btn { width: 100%; white-space: normal; }

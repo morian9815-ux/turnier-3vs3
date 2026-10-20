@@ -1561,7 +1561,10 @@
                 }).join('')}
               </div>
               <div class="sched-footer-actions">
-                <button type="button" class="btn btn-ghost btn-sm" id="start-counter-btn">↺ Keiner passt? Gegenvorschlag (1–3 Termine) machen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="start-counter-btn">
+                  <span class="hl-long">↺ Keiner passt? Gegenvorschlag (1–3 Termine) machen</span>
+                  <span class="hl-short">↺ Keiner passt? Gegenvorschlag machen</span>
+                </button>
               </div>
               ${adminBarHTML}
             </section>`;
